@@ -1,0 +1,21 @@
+## ESP-IDF managed component dependencies.
+## Run `idf.py reconfigure` to fetch these into managed_components/.
+##
+## Many UI-related deps (esp_codec_dev, esp_lcd_jd9365, esp_lcd_touch_gt911,
+## esp_lvgl_adapter, lvgl) are now pulled transitively by the Waveshare BSP
+## under components/esp32_p4_wifi6_touch_lcd_x. We don't list them here so
+## the BSP's pinned versions win - it knows what it needs.
+##
+## mqtt and cjson are declared per-component (weight_mqtt, weight_model_store)
+## since they moved out of IDF core in v6.
+dependencies:
+  idf:
+    version: ">=5.3.0,<7.0.0"
+
+  # ESP32-C6 WiFi co-processor (on this board, C6 handles WiFi via SDIO).
+  # Versions MUST match the slave firmware Waveshare flashed onto the C6,
+  # confirmed via their 04_wifistation example which connects successfully.
+  # Newer host versions (esp_hosted >= 2.0) fail with
+  # "OS adapter function version error! Version 8 is expected, but it is 0"
+  espressif/esp_hosted: "==1.4.*"
+  espressif/esp_wifi_remote: "==0.14.*"

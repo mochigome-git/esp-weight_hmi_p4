@@ -1,0 +1,58 @@
+# ESP-IDF build output
+build/
+sdkconfig.old
+dependencies.lock
+
+# ESP-IDF managed components cache
+managed_components/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# VSCode
+.vscode/
+
+# Eclipse
+.cproject
+.project
+.settings/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+*.egg-info/
+
+# Certificates and keys — never commit these
+certs/
+*.pem
+*.crt
+*.cer
+*.key
+*.p12
+*.pfx
+*.der
+
+
+# Flash encryption / secure boot keys
+*.bin.enc
+*_key.bin
+*_keys.bin
+secure_boot_signing_key.pem
+
+# Logs
+*.log
+idf.py.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+*.swp
+*.swo
+*~

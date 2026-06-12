@@ -1,0 +1,184 @@
+# =============================================================================
+# sdkconfig.defaults for ESP32-P4 Weighing Scale HMI
+# Hardware: Waveshare ESP32-P4-WIFI6-Touch-LCD-10.1 (P4 + C6 co-processor)
+# Run `idf.py reconfigure` after changing this file.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Target chip & flash
+# -----------------------------------------------------------------------------
+CONFIG_IDF_TARGET="esp32p4"
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="32MB"
+
+# Chip revision — Waveshare 04_wifistation example uses REV_MIN_1
+CONFIG_ESP32P4_SELECTS_REV_LESS_V3=y
+CONFIG_ESP32P4_REV_MIN_1=y
+
+# Partition table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+
+# -----------------------------------------------------------------------------
+# CPU & memory
+# -----------------------------------------------------------------------------
+# P4's rated HP-core max is 360 MHz; IDF v6.0 defaults to 400 MHz which
+# asserts in esp_clk_init on many revisions. Pin to 360 MHz explicitly.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=360
+
+# 32 MB octal PSRAM
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_200M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=8192
+CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=0
+
+# ESP-Hosted SDIO: use PSRAM for buffer pool to free internal SRAM
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
+CONFIG_ESP_HOSTED_SDIO_TX_Q_SIZE=8
+CONFIG_ESP_HOSTED_SDIO_RX_Q_SIZE=8
+
+# L2 cache
+CONFIG_CACHE_L2_CACHE_256KB=y
+CONFIG_CACHE_L2_CACHE_LINE_128B=y
+
+# Main task stack
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Compiler
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+
+
+
+# -----------------------------------------------------------------------------
+# FreeRTOS
+# -----------------------------------------------------------------------------
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+
+# Task watchdog — give long init steps room
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+
+# Panic handling
+CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
+CONFIG_ESP_SYSTEM_USE_FRAME_POINTER=y
+
+# -----------------------------------------------------------------------------
+# WiFi via ESP-Hosted (C6 co-processor over SDIO)
+# -----------------------------------------------------------------------------
+# Core enables
+CONFIG_ESP_WIFI_REMOTE_ENABLED=y
+CONFIG_ESP_HOSTED_ENABLED=y
+
+# Only station mode — no SoftAP — saves ~10KB internal SRAM
+CONFIG_ESP_WIFI_SOFTAP_SUPPORT=n
+
+# Slave target is the ESP32-C6
+CONFIG_ESP_HOSTED_IDF_SLAVE_TARGET="esp32c6"
+
+# Transport: SDIO (this is THE critical line — without it the transport
+# layer compiles to a stub and esp_wifi_get_mac() returns "Not support")
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+
+# SDIO transport parameters — match Waveshare's confirmed-working config
+CONFIG_ESP_HOSTED_SDIO_HOST_INTERFACE=y
+CONFIG_ESP_HOSTED_SDIO_4_BIT_BUS=y
+CONFIG_ESP_HOSTED_SDIO_BUS_WIDTH=4
+CONFIG_ESP_HOSTED_SDIO_CLOCK_FREQ_KHZ=40000
+CONFIG_ESP_HOSTED_SDIO_GPIO_RESET_SLAVE=54
+CONFIG_ESP_HOSTED_SDIO_RESET_ACTIVE_LOW=y
+CONFIG_ESP_HOSTED_SDIO_OPTIMIZATION_RX_STREAMING_MODE=y
+
+# SDIO pins (match factory log: CLK[18] CMD[19] D0[14] D1[15] D2[16] D3[17])
+CONFIG_ESP_HOSTED_SDIO_PIN_CLK=18
+CONFIG_ESP_HOSTED_SDIO_PIN_CMD=19
+CONFIG_ESP_HOSTED_SDIO_PIN_D0=14
+CONFIG_ESP_HOSTED_SDIO_PIN_D1=15
+CONFIG_ESP_HOSTED_SDIO_PIN_D2=16
+CONFIG_ESP_HOSTED_SDIO_PIN_D3=17
+
+# WiFi-remote buffer tuning (from factory config)
+CONFIG_WIFI_RMT_STATIC_RX_BUFFER_NUM=16
+CONFIG_WIFI_RMT_DYNAMIC_RX_BUFFER_NUM=64
+CONFIG_WIFI_RMT_DYNAMIC_TX_BUFFER_NUM=64
+CONFIG_WIFI_RMT_AMPDU_TX_ENABLED=y
+CONFIG_WIFI_RMT_TX_BA_WIN=32
+CONFIG_WIFI_RMT_AMPDU_RX_ENABLED=y
+CONFIG_WIFI_RMT_RX_BA_WIN=32
+
+# -----------------------------------------------------------------------------
+# Waveshare BSP (esp32_p4_wifi6_touch_lcd_x)
+# -----------------------------------------------------------------------------
+# 10.1" 800x1280 panel
+CONFIG_BSP_LCD_TYPE_800_1280_10_1_INCH=y
+
+# RGB565 — half the frame buffer of RGB888, plenty for UI
+CONFIG_BSP_LCD_COLOR_FORMAT_RGB565=y
+
+# 3 frame buffers — required for triple-partial tearing-avoid mode
+CONFIG_BSP_LCD_DPI_BUFFER_NUMS=3
+
+# SPIFFS (label must match partitions.csv)
+CONFIG_BSP_SPIFFS_PARTITION_LABEL="storage"
+CONFIG_BSP_SPIFFS_MOUNT_POINT="/spiffs"
+CONFIG_BSP_SPIFFS_MAX_FILES=5
+
+# I2C / I2S
+CONFIG_BSP_I2C_NUM=1
+CONFIG_BSP_I2C_FAST_MODE=y
+CONFIG_BSP_I2S_NUM=1
+
+# Backlight on LEDC ch1 (ch0 reserved)
+CONFIG_BSP_DISPLAY_BRIGHTNESS_LEDC_CH=1
+
+# SD card mount point (optional)
+CONFIG_BSP_SD_MOUNT_POINT="/sdcard"
+
+# -----------------------------------------------------------------------------
+# LVGL — push allocations to PSRAM, free internal SRAM for WiFi
+# -----------------------------------------------------------------------------
+CONFIG_LV_USE_SPI_RAM_ON=y
+CONFIG_LV_ATTRIBUTE_FAST_MEM_USE_IRAM=n
+
+# All Montserrat font sizes used in the UI
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_18=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_36=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+CONFIG_LV_FONT_DEFAULT_MONTSERRAT_14=y
+
+# -----------------------------------------------------------------------------
+# Networking — bigger TCP windows for MQTT/TLS to EMQX
+# -----------------------------------------------------------------------------
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=64
+CONFIG_LWIP_TCP_WND_DEFAULT=65535
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=65535
+
+# MQTT
+CONFIG_MQTT_PROTOCOL_311=y
+CONFIG_MQTT_TRANSPORT_SSL=y
+
+# mbedTLS — bigger heap for EMQX TLS handshake
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_PEER_CERT=y
+CONFIG_MBEDTLS_DYNAMIC_FREE_CONFIG_DATA=y
+
+
+# -----------------------------------------------------------------------------
+# Logging
+# -----------------------------------------------------------------------------
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

@@ -1,0 +1,7 @@
+## Dependencies for the weight_mqtt component.
+## ESP-IDF v6.0 moved esp-mqtt out of the core - it's now espressif/mqtt.
+## cJSON is needed here too (also moved out of core as espressif/cjson).
+## These will be fetched into managed_components/ on first reconfigure.
+dependencies:
+  espressif/mqtt: "*"
+  espressif/cjson: "*"
