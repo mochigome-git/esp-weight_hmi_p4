@@ -136,13 +136,23 @@ bool weight_model_store_find_by_id(const char *id, weight_model_t *out)
 
 esp_err_t weight_model_store_upsert_local(const weight_model_t *m)
 {
-    if (!m || m->id[0] == '\0')
+    if (!m || m->name[0] == '\0')
         return ESP_ERR_INVALID_ARG;
+
+    weight_model_t tmp;
+    memcpy(&tmp, m, sizeof(tmp));
+
+    // Generate a local temporary id if empty
+    if (tmp.id[0] == '\0')
+    {
+        snprintf(tmp.id, sizeof(tmp.id), "local-%ld", (long)time(NULL));
+    }
+
     LOCK();
-    int idx = find_index_locked(m->id);
+    int idx = find_index_locked(tmp.id);
     if (idx >= 0)
     {
-        memcpy(&s_models[idx], m, sizeof(*m));
+        memcpy(&s_models[idx], &tmp, sizeof(tmp));
     }
     else
     {
@@ -151,11 +161,11 @@ esp_err_t weight_model_store_upsert_local(const weight_model_t *m)
             UNLOCK();
             return ESP_ERR_NO_MEM;
         }
-        memcpy(&s_models[s_count++], m, sizeof(*m));
+        memcpy(&s_models[s_count++], &tmp, sizeof(tmp));
     }
     esp_err_t err = persist_all_locked();
     UNLOCK();
-    ESP_LOGI(TAG, "upsert %s '%s'", m->id, m->name);
+    ESP_LOGI(TAG, "upsert %s '%s'", tmp.id, tmp.name);
     return err;
 }
 

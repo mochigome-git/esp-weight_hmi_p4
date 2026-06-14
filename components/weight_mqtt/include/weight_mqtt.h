@@ -9,7 +9,7 @@
  *   PUB  {tenant_short}/{device_id}/weight       reading JSON
  *   PUB  {tenant_short}/{device_id}/status       LWT + retained status
  *   PUB  {tenant_short}/{device_id}/sync/req     request full model resync
- *   SUB  {tenant_short}/models/sync/+            upsert/delete events from Go svc
+ *   SUB  {tenant_short}/models/sync/#            upsert/delete events from Go svc
  *
  * Reading JSON shape (matches the user's spec):
  *   {
@@ -29,6 +29,7 @@
 #include <time.h>
 #include "esp_err.h"
 #include "weight_state.h"
+#include "weight_model_store.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -58,6 +59,10 @@ extern "C"
     bool weight_mqtt_is_connected(void);
 
     esp_err_t weight_mqtt_publish_heartbeat(void);
+
+    esp_err_t weight_mqtt_publish_model_push(const weight_model_t *m);
+
+    esp_err_t weight_mqtt_publish_model_delete(const char *id);
 
 #ifdef __cplusplus
 }

@@ -1,4 +1,0 @@
-## Dependencies for the weight_model_store component.
-## cJSON moved out of ESP-IDF core in v6.0 - now espressif/cjson.
-dependencies:
-  espressif/cjson: "*"

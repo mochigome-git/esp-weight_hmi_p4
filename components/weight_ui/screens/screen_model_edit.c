@@ -21,10 +21,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "esp_random.h"
 #include "ui_theme.h"
 #include "weight_ui.h"
 #include "weight_config.h"
 #include "weight_model_store.h"
+#include "weight_mqtt.h"
 
 static const char *TAG = "scr_edit";
 
@@ -142,6 +144,18 @@ static int validate_and_highlight(void)
     return 0;
 }
 
+static void generate_uuid(char *out, size_t len)
+{
+    uint8_t r[16];
+    esp_fill_random(r, sizeof(r));
+    r[6] = (r[6] & 0x0f) | 0x40; // version 4
+    r[8] = (r[8] & 0x3f) | 0x80; // variant
+    snprintf(out, len,
+             "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+             r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
+             r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
+}
+
 static void load_for_edit(void)
 {
     memset(&s_buf, 0, sizeof(s_buf));
@@ -155,7 +169,7 @@ static void load_for_edit(void)
     else
     {
         /* New model - generate a UUID-ish id from time and a counter */
-        snprintf(s_buf.id, sizeof(s_buf.id), "local-%lu", (unsigned long)time(NULL));
+        generate_uuid(s_buf.id, sizeof(s_buf.id));
         strncpy(s_buf.unit, "g", sizeof(s_buf.unit) - 1);
         lv_label_set_text(s_title_lbl, "New model");
         lv_obj_add_flag(s_delete_btn, LV_OBJ_FLAG_HIDDEN);
@@ -254,6 +268,10 @@ static void on_numpad_btn(lv_event_t *e)
         }
         weight_model_store_upsert_local(&s_buf);
         ESP_LOGI(TAG, "save: post-upsert");
+
+        // Push to Supabase via MQTT bridge
+        weight_mqtt_publish_model_push(&s_buf);
+
         lv_async_call(do_show_models, NULL);
         return;
     }
@@ -382,6 +400,7 @@ static void on_delete(lv_event_t *e)
     ESP_LOGI(TAG, "delete clicked, id=%s", s_buf.id);
     if (s_buf.id[0] == '\0')
         return;
+    weight_mqtt_publish_model_delete(s_buf.id);
     weight_model_store_delete_local(s_buf.id);
     memset(&s_buf, 0, sizeof(s_buf));
     screen_model_edit_set_index(-1);

@@ -37,6 +37,7 @@ static char s_topic_status[96];
 static char s_topic_sync_req[96];
 static char s_topic_sync_sub[96];
 static char s_topic_payload[96];
+static char s_topic_model_push[96];
 
 /* Heap-allocated CA cert (PEM), loaded from NVS at init */
 static char *s_ca_pem = NULL;
@@ -73,15 +74,12 @@ static void build_topics(const weight_state_snapshot_t *s)
 {
     /* Topic scheme: {tenant_short}/{device_id}/...
      * keeps broker output short and human-readable. */
-    snprintf(s_topic_reading, sizeof(s_topic_reading),
-             "%s/%s/weight", s->tenant_short, s->device_id);
-    snprintf(s_topic_status, sizeof(s_topic_status),
-             "%s/%s/status", s->tenant_short, s->device_id);
-    snprintf(s_topic_sync_req, sizeof(s_topic_sync_req),
-             "%s/%s/sync/req", s->tenant_short, s->device_id);
-    snprintf(s_topic_sync_sub, sizeof(s_topic_sync_sub),
-             "%s/models/sync/+", s->tenant_short);
+    snprintf(s_topic_reading, sizeof(s_topic_reading), "%s/%s/weight", s->tenant_short, s->device_id);
+    snprintf(s_topic_status, sizeof(s_topic_status), "%s/%s/status", s->tenant_short, s->device_id);
+    snprintf(s_topic_sync_req, sizeof(s_topic_sync_req), "%s/%s/sync/req", s->tenant_short, s->device_id);
+    snprintf(s_topic_sync_sub, sizeof(s_topic_sync_sub), "%s/models/sync/#", s->tenant_short);
     snprintf(s_topic_payload, sizeof(s_topic_payload), "%s/devices/payload", s->tenant_short);
+    snprintf(s_topic_model_push, sizeof(s_topic_model_push), "%s/models/push", s->tenant_short); // no device_id
 }
 
 /* Uptime in seconds since boot */
@@ -176,9 +174,36 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             char *payload = strndup(event->data, event->data_len);
             if (payload)
             {
-                esp_err_t err = weight_model_store_apply_remote_json(payload);
-                if (err != ESP_OK)
-                    ESP_LOGW(TAG, "sync apply failed: %s", esp_err_to_name(err));
+                // Bridge sends {"timestamp":"...","models":[{...},{...}]}
+                // Iterate the array and apply each model individually
+                cJSON *root = cJSON_Parse(payload);
+                if (root)
+                {
+                    cJSON *models_arr = cJSON_GetObjectItem(root, "models");
+                    if (cJSON_IsArray(models_arr))
+                    {
+                        cJSON *item;
+                        cJSON_ArrayForEach(item, models_arr)
+                        {
+                            char *model_str = cJSON_PrintUnformatted(item);
+                            if (model_str)
+                            {
+                                esp_err_t err = weight_model_store_apply_remote_json(model_str);
+                                if (err != ESP_OK)
+                                    ESP_LOGW(TAG, "sync apply failed: %s", esp_err_to_name(err));
+                                free(model_str);
+                            }
+                        }
+                    }
+                    else
+                    {
+                        // Fallback: single model object
+                        esp_err_t err = weight_model_store_apply_remote_json(payload);
+                        if (err != ESP_OK)
+                            ESP_LOGW(TAG, "sync apply failed: %s", esp_err_to_name(err));
+                    }
+                    cJSON_Delete(root);
+                }
                 free(payload);
             }
         }
@@ -192,6 +217,60 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
     default:
         break;
     }
+}
+
+esp_err_t weight_mqtt_publish_model_delete(const char *id)
+{
+    if (!s_connected)
+        return ESP_ERR_INVALID_STATE;
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "id", id);
+
+    char *payload = cJSON_PrintUnformatted(root);
+    ESP_LOGI(TAG, "publishing model delete to: '%s'", s_topic_model_push);
+    ESP_LOGI(TAG, "payload: %s", payload);
+
+    // Reuse models/push topic with a "deleted" flag
+    cJSON_AddBoolToObject(root, "deleted", true);
+    free(payload);
+    payload = cJSON_PrintUnformatted(root);
+
+    int msg_id = esp_mqtt_client_publish(s_client, s_topic_model_push,
+                                         payload, 0, 1, 0);
+    free(payload);
+    cJSON_Delete(root);
+    return msg_id >= 0 ? ESP_OK : ESP_FAIL;
+}
+
+esp_err_t weight_mqtt_publish_model_push(const weight_model_t *m)
+{
+    if (!s_connected)
+        return ESP_ERR_INVALID_STATE;
+
+    char s_lower[16], s_standard[16], s_upper[16];
+    snprintf(s_lower, sizeof(s_lower), "%.3f", m->lower_limit);
+    snprintf(s_standard, sizeof(s_standard), "%.3f", m->standard);
+    snprintf(s_upper, sizeof(s_upper), "%.3f", m->upper_limit);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "id", m->id);
+    cJSON_AddStringToObject(root, "name", m->name);
+    cJSON_AddRawToObject(root, "lower_limit", s_lower);
+    cJSON_AddRawToObject(root, "standard", s_standard);
+    cJSON_AddRawToObject(root, "upper_limit", s_upper);
+    const weight_config_t *cfg = weight_config_get();
+    cJSON_AddStringToObject(root, "unit", weight_config_unit_str(cfg->unit));
+
+    char *payload = cJSON_PrintUnformatted(root);
+    ESP_LOGI(TAG, "publishing model push to: '%s'", s_topic_model_push);
+    ESP_LOGI(TAG, "payload: %s", payload);
+
+    int msg_id = esp_mqtt_client_publish(s_client, s_topic_model_push,
+                                         payload, 0, 1, 0);
+    free(payload);
+    cJSON_Delete(root);
+    return msg_id >= 0 ? ESP_OK : ESP_FAIL;
 }
 
 esp_err_t weight_mqtt_init(void)
@@ -334,7 +413,7 @@ esp_err_t weight_mqtt_restart(void)
     snprintf(s_topic_reading, sizeof(s_topic_reading), "%s/%s/weight", snap.tenant_short, dev_id);
     snprintf(s_topic_status, sizeof(s_topic_status), "%s/%s/status", snap.tenant_short, dev_id);
     snprintf(s_topic_sync_req, sizeof(s_topic_sync_req), "%s/%s/sync/req", snap.tenant_short, dev_id);
-    snprintf(s_topic_sync_sub, sizeof(s_topic_sync_sub), "%s/models/sync/+", snap.tenant_short);
+    snprintf(s_topic_sync_sub, sizeof(s_topic_sync_sub), "%s/models/sync/#", snap.tenant_short);
     snprintf(s_topic_payload, sizeof(s_topic_payload), "%s/devices/payload", snap.tenant_short);
 
     ESP_LOGI(TAG, "topics rebuilt:");
