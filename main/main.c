@@ -41,6 +41,7 @@
 #include "weight_uart.h"
 #include "weight_evaluator.h"
 #include "weight_model_store.h"
+#include "weight_i18n.h"
 #include "bsp/esp32_p4_wifi6_touch_lcd_x.h"
 
 /* =============================================================================
@@ -88,6 +89,7 @@ void app_main(void)
 
     /* 4. Config */
     ESP_ERROR_CHECK(weight_config_init());
+    weight_i18n_init(weight_config_get_lang());
 
     const weight_config_t *cfg = weight_config_get();
     weight_state_set_tenant(cfg->tenant_id, cfg->tenant_short);

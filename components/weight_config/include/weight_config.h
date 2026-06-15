@@ -34,12 +34,14 @@ extern "C"
 
     typedef struct
     {
+
         /* Device */
         char device_id[32];
         char tenant_id[64];
         char tenant_short[16];
 
         /* Display */
+        uint8_t lang;           /* 0 = EN, 1 = JA */
         uint8_t decimal_places; /* 0..3 */
         wcfg_unit_t unit;
 
@@ -75,6 +77,8 @@ extern "C"
     const weight_config_t *weight_config_get(void);
 
     /* Mutators - just modify the cached struct; commit with _save. */
+    int weight_config_get_lang(void);
+    void weight_config_set_lang(int lang);
     void weight_config_set_device_id(const char *id);
     void weight_config_set_tenant(const char *tenant_id, const char *tenant_short);
     void weight_config_set_decimal(uint8_t d);

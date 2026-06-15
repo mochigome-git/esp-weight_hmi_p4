@@ -31,6 +31,7 @@
 #include "weight_ui.h"
 #include "weight_mqtt.h"
 #include "weight_config.h"
+#include "weight_i18n.h"
 #include "bsp/esp32_p4_wifi6_touch_lcd_x.h"
 
 static const char *TAG = "scr_mqtt";
@@ -41,7 +42,7 @@ static lv_obj_t *s_user_ta;
 static lv_obj_t *s_pass_ta;
 static lv_obj_t *s_tls_sw;
 static lv_obj_t *s_keyboard;
-static bool s_port_user_edited; /* don't auto-bump port if user touched it */
+static bool s_port_user_edited;
 
 /* ---------------------------------------------------------------------------
  * Helpers
@@ -56,35 +57,23 @@ static void bind_keyboard_to(lv_obj_t *ta, lv_keyboard_mode_t mode)
 static void on_field_focused(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
-
-    /* Numeric keypad for port, normal QWERTY for the rest */
-    if (ta == s_port_ta)
-    {
-        bind_keyboard_to(ta, LV_KEYBOARD_MODE_NUMBER);
-    }
-    else
-    {
-        bind_keyboard_to(ta, LV_KEYBOARD_MODE_TEXT_LOWER);
-    }
+    bind_keyboard_to(ta, (ta == s_port_ta)
+                             ? LV_KEYBOARD_MODE_NUMBER
+                             : LV_KEYBOARD_MODE_TEXT_LOWER);
 }
 
-static void on_port_value_changed(lv_event_t *e)
-{
-    s_port_user_edited = true;
-}
+static void on_port_value_changed(lv_event_t *e) { s_port_user_edited = true; }
 
 static void on_tls_changed(lv_event_t *e)
 {
-    /* If user hasn't manually set the port, swap to sensible default */
     if (s_port_user_edited)
         return;
-
     bool tls_on = lv_obj_has_state(s_tls_sw, LV_STATE_CHECKED);
     lv_textarea_set_text(s_port_ta, tls_on ? "8883" : "1883");
 }
 
 /* ---------------------------------------------------------------------------
- * Save + connect
+ * Navigation / connect
  * --------------------------------------------------------------------------- */
 static void on_back(lv_event_t *e)
 {
@@ -93,27 +82,22 @@ static void on_back(lv_event_t *e)
 
 static void mqtt_connect_task(void *arg)
 {
-    /* Restart MQTT so it picks up new config (host, client_id, creds) */
     esp_err_t err = weight_mqtt_restart();
-
     if (err != ESP_OK)
     {
         ESP_LOGW(TAG, "weight_mqtt_restart failed: %s", esp_err_to_name(err));
-        ui_loading_set_text("Connect failed - check broker settings");
+        ui_loading_set_text(TR(mqtt_connect_failed));
         vTaskDelay(pdMS_TO_TICKS(1500));
         ui_loading_hide();
         vTaskDelete(NULL);
         return;
     }
-
-    /* Wait up to 8s for connection */
     for (int i = 0; i < 80; i++)
     {
         vTaskDelay(pdMS_TO_TICKS(100));
         if (weight_mqtt_is_connected())
             break;
     }
-
     ui_loading_hide();
     vTaskDelete(NULL);
 }
@@ -128,28 +112,23 @@ static void on_connect(lv_event_t *e)
 
     if (!host || host[0] == '\0')
     {
-        lv_textarea_set_placeholder_text(s_host_ta, "Host required!");
+        lv_textarea_set_placeholder_text(s_host_ta, TR(mqtt_host_required));
         return;
     }
-
     long port = strtol(port_str, NULL, 10);
     if (port < 1 || port > 65535)
     {
-        lv_textarea_set_placeholder_text(s_port_ta, "1-65535");
+        lv_textarea_set_placeholder_text(s_port_ta, TR(mqtt_port_invalid));
         return;
     }
 
     ESP_LOGI(TAG, "saving MQTT: %s:%ld tls=%d user='%s'", host, port, tls, user);
-
-    /* Save config first — weight_mqtt_restart() reads from config */
     weight_config_set_mqtt(host, (uint16_t)port, user, pass, tls);
     weight_config_save();
-    weight_mqtt_restart(); // ← rebuild topics + reconnect with new device ID
+    weight_mqtt_restart();
 
-    ui_loading_show("Connecting to MQTT broker...");
-
+    ui_loading_show(TR(mqtt_connecting));
     xTaskCreate(mqtt_connect_task, "mqtt_connect", 4096, NULL, 5, NULL);
-
     weight_ui_show(UI_SCREEN_SETTINGS);
 }
 
@@ -157,29 +136,20 @@ static void on_keyboard_event(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_READY)
-    {
         on_connect(e);
-    }
     else if (code == LV_EVENT_CANCEL)
-    {
         lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
-    }
 }
 
-/* ---------------------------------------------------------------------------
- * Populate fields from saved config when screen loads
- * --------------------------------------------------------------------------- */
 static void on_screen_load(lv_event_t *e)
 {
     const weight_config_t *cfg = weight_config_get();
-
     lv_textarea_set_text(s_host_ta, cfg->mqtt_host);
 
     char port_buf[8];
     snprintf(port_buf, sizeof(port_buf), "%u",
              cfg->mqtt_port ? (unsigned)cfg->mqtt_port : 8883u);
     lv_textarea_set_text(s_port_ta, port_buf);
-
     lv_textarea_set_text(s_user_ta, cfg->mqtt_user);
     lv_textarea_set_text(s_pass_ta, cfg->mqtt_pass);
 
@@ -193,14 +163,14 @@ static void on_screen_load(lv_event_t *e)
 }
 
 /* ---------------------------------------------------------------------------
- * Helper: build a labelled textarea (label above, ta below)
+ * Field helper
  * --------------------------------------------------------------------------- */
 static lv_obj_t *make_field(lv_obj_t *parent, const char *title,
                             const char *placeholder, bool password, int width)
 {
     lv_obj_t *label = lv_label_create(parent);
     lv_obj_set_style_text_color(label, UI_COLOR_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(label, ui_font_small(), 0);
     lv_label_set_text(label, title);
 
     lv_obj_t *ta = lv_textarea_create(parent);
@@ -214,10 +184,8 @@ static lv_obj_t *make_field(lv_obj_t *parent, const char *title,
     if (password)
         lv_textarea_set_password_mode(ta, true);
 
-    /* Tap-to-focus binds the keyboard */
     lv_obj_add_event_cb(ta, on_field_focused, LV_EVENT_FOCUSED, NULL);
     lv_obj_add_event_cb(ta, on_field_focused, LV_EVENT_CLICKED, NULL);
-
     return ta;
 }
 
@@ -242,31 +210,52 @@ lv_obj_t *screen_mqtt_create(void)
     lv_obj_set_style_pad_hor(topbar, UI_PAD, 0);
     lv_obj_clear_flag(topbar, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* Back button */
     lv_obj_t *back = lv_btn_create(topbar);
-    lv_obj_set_size(back, 100, 40);
+    lv_obj_set_size(back, 120, 40);
     lv_obj_align(back, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_set_style_bg_color(back, UI_COLOR_PANEL_ALT, 0);
     lv_obj_set_style_radius(back, UI_RADIUS_S, 0);
     lv_obj_add_event_cb(back, on_back, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *bl = lv_label_create(back);
-    lv_label_set_text(bl, LV_SYMBOL_LEFT "  back");
-    lv_obj_center(bl);
 
+    lv_obj_t *back_sym = lv_label_create(back);
+    lv_obj_set_style_text_font(back_sym, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(back_sym, UI_COLOR_TEXT, 0);
+    lv_label_set_text(back_sym, LV_SYMBOL_LEFT);
+    lv_obj_align(back_sym, LV_ALIGN_LEFT_MID, 6, 0);
+
+    lv_obj_t *back_txt = lv_label_create(back);
+    lv_obj_set_style_text_font(back_txt, ui_font_small(), 0);
+    lv_obj_set_style_text_color(back_txt, UI_COLOR_TEXT, 0);
+    lv_label_set_text(back_txt, TR(settings_back));
+    lv_obj_align_to(back_txt, back_sym, LV_ALIGN_OUT_RIGHT_MID, 4, 0);
+
+    /* Title */
     lv_obj_t *title = lv_label_create(topbar);
     lv_obj_set_style_text_color(title, UI_COLOR_TEXT, 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-    lv_label_set_text(title, "MQTT broker");
+    lv_obj_set_style_text_font(title, ui_font_large(), 0);
+    lv_label_set_text(title, TR(mqtt_title));
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
 
+    /* Connect button */
     lv_obj_t *connect = lv_btn_create(topbar);
-    lv_obj_set_size(connect, 140, 40);
+    lv_obj_set_size(connect, 160, 40);
     lv_obj_align(connect, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_bg_color(connect, UI_COLOR_ACCENT, 0);
     lv_obj_set_style_radius(connect, UI_RADIUS_S, 0);
     lv_obj_add_event_cb(connect, on_connect, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *cl = lv_label_create(connect);
-    lv_label_set_text(cl, LV_SYMBOL_OK "  Connect");
-    lv_obj_center(cl);
+
+    lv_obj_t *connect_sym = lv_label_create(connect);
+    lv_obj_set_style_text_font(connect_sym, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(connect_sym, UI_COLOR_TEXT, 0);
+    lv_label_set_text(connect_sym, LV_SYMBOL_OK);
+    lv_obj_align(connect_sym, LV_ALIGN_LEFT_MID, 8, 0);
+
+    lv_obj_t *connect_txt = lv_label_create(connect);
+    lv_obj_set_style_text_font(connect_txt, ui_font_small(), 0);
+    lv_obj_set_style_text_color(connect_txt, UI_COLOR_TEXT, 0);
+    lv_label_set_text(connect_txt, TR(mqtt_connect));
+    lv_obj_align_to(connect_txt, connect_sym, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
 
     /* ---- Left: form fields ---- */
     const int LEFT_W = 560;
@@ -282,14 +271,14 @@ lv_obj_t *screen_mqtt_create(void)
 
     const int FIELD_W = LEFT_W - UI_PAD * 2;
 
-    s_host_ta = make_field(left, "Broker host",
-                           "broker.example.com", false, FIELD_W);
+    s_host_ta = make_field(left, TR(mqtt_host),
+                           TR(mqtt_host_placeholder), false, FIELD_W);
 
     /* Port + TLS row */
     lv_obj_t *port_label = lv_label_create(left);
     lv_obj_set_style_text_color(port_label, UI_COLOR_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(port_label, &lv_font_montserrat_14, 0);
-    lv_label_set_text(port_label, "Port              TLS");
+    lv_obj_set_style_text_font(port_label, ui_font_small(), 0);
+    lv_label_set_text(port_label, TR(mqtt_port_tls));
 
     lv_obj_t *port_row = lv_obj_create(left);
     lv_obj_set_size(port_row, FIELD_W, 60);
@@ -318,11 +307,11 @@ lv_obj_t *screen_mqtt_create(void)
     lv_obj_align(s_tls_sw, LV_ALIGN_LEFT_MID, 200, 0);
     lv_obj_add_event_cb(s_tls_sw, on_tls_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
-    s_user_ta = make_field(left, "Username",
-                           "(optional)", false, FIELD_W);
+    s_user_ta = make_field(left, TR(mqtt_user),
+                           TR(mqtt_user_placeholder), false, FIELD_W);
 
-    s_pass_ta = make_field(left, "Password",
-                           "(optional)", true, FIELD_W);
+    s_pass_ta = make_field(left, TR(mqtt_pass),
+                           TR(mqtt_pass_placeholder), true, FIELD_W);
 
     /* ---- Right: keyboard ---- */
     s_keyboard = lv_keyboard_create(scr);

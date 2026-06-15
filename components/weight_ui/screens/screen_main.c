@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include <time.h>
 #include "ui_theme.h"
+#include "weight_i18n.h"
 #include "weight_ui.h"
 #include "weight_state.h"
 #include "weight_config.h"
@@ -99,7 +100,7 @@ static void rebuild_model_dropdown(void)
             break;
     }
     if (off == 0)
-        snprintf(buf, sizeof(buf), "(no models)");
+        snprintf(buf, sizeof(buf), "%s", TR(main_model_none));
 
     lv_dropdown_set_options(s_model_dropdown, buf);
 }
@@ -211,40 +212,37 @@ static void refresh_cb(lv_timer_t *t)
     lv_label_set_text(s_unit_lbl, weight_config_unit_str(cfg->unit));
 
     /* Status pill */
-    const char *status_txt = "IDLE";
+    const char *status_txt = TR(main_status_idle);
     if (snap.mode == WEIGHT_MODE_RUN)
     {
         if (!snap.last_stable)
         {
-            status_txt = "RUN | weighing...";
+            status_txt = TR(main_status_weighing);
         }
         else
         {
             switch (snap.last_status)
             {
             case WEIGHT_STATUS_PASS:
-                status_txt = "PASS | STABLE";
+                status_txt = TR(main_status_pass);
                 break;
             case WEIGHT_STATUS_HIGH:
-                status_txt = "HIGH | OVER LIMIT";
+                status_txt = TR(main_status_high);
                 break;
             case WEIGHT_STATUS_LOW:
-                status_txt = "LOW | UNDER LIMIT";
+                status_txt = TR(main_status_low);
                 break;
             default:
-                status_txt = "RUN";
+                status_txt = TR(main_status_run);
                 break;
             }
         }
     }
     else if (snap.model.valid)
     {
-        status_txt = "IDLE | model loaded";
+        status_txt = TR(main_status_idle_model);
     }
-    else if (snap.model.valid)
-    {
-        status_txt = "IDLE | model loaded";
-    }
+
     lv_label_set_text(s_status_pill_lbl, status_txt);
 
     /* Card color — only show PASS/HIGH/LOW after reading is stable.
@@ -269,7 +267,7 @@ static void refresh_cb(lv_timer_t *t)
     }
     else
     {
-        lv_label_set_text(s_model_lbl, "(none - pick one)");
+        lv_label_set_text(s_model_lbl, TR(main_model_empty));
         lv_label_set_text(s_upper_lbl, "");
         lv_label_set_text(s_std_lbl, "");
         lv_label_set_text(s_lower_lbl, "");
@@ -278,12 +276,12 @@ static void refresh_cb(lv_timer_t *t)
     /* RUN/STOP button */
     if (snap.mode == WEIGHT_MODE_RUN)
     {
-        lv_label_set_text(s_runstop_lbl, "STOP");
+        lv_label_set_text(s_runstop_lbl, TR(main_btn_stop));
         lv_obj_set_style_bg_color(s_runstop_btn, UI_COLOR_HIGH_DARK, 0);
     }
     else
     {
-        lv_label_set_text(s_runstop_lbl, "READY");
+        lv_label_set_text(s_runstop_lbl, TR(main_btn_ready));
         lv_obj_set_style_bg_color(s_runstop_btn, UI_COLOR_PASS_DARK, 0);
     }
 
@@ -321,8 +319,8 @@ static void refresh_cb(lv_timer_t *t)
     {
         lv_obj_clear_flag(s_alert_banner, LV_OBJ_FLAG_HIDDEN);
         const char *prefix = (snap.alert_status == WEIGHT_STATUS_HIGH)
-                                 ? "Reading exceeds upper limit"
-                                 : "Reading below lower limit";
+                                 ? TR(main_alert_high)
+                                 : TR(main_alert_low);
         float limit_val = (snap.alert_status == WEIGHT_STATUS_HIGH)
                               ? snap.model.upper_limit
                               : snap.model.lower_limit;
@@ -333,6 +331,18 @@ static void refresh_cb(lv_timer_t *t)
     {
         lv_obj_add_flag(s_alert_banner, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+void screen_main_cleanup(void)
+{
+    if (s_refresh_timer)
+    {
+        lv_timer_pause(s_refresh_timer);
+        lv_timer_del(s_refresh_timer);
+        s_refresh_timer = NULL;
+    }
+    s_store_ready = false;
+    s_last_model_count = (size_t)-1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -351,14 +361,14 @@ static lv_obj_t *make_field(lv_obj_t *parent, const char *label, lv_obj_t **valu
 
     lv_obj_t *l = lv_label_create(card);
     lv_obj_set_style_text_color(l, UI_COLOR_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(l, ui_font_small(), 0);
     lv_label_set_text(l, label);
     lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 0);
 
     *value_out = lv_label_create(card);
     lv_obj_set_style_text_color(*value_out, UI_COLOR_TEXT, 0);
-    lv_obj_set_style_text_font(*value_out, &lv_font_montserrat_18, 0);
-    lv_label_set_text(*value_out, "—");
+    lv_obj_set_style_text_font(*value_out, ui_font_normal(), 0);
+    lv_label_set_text(*value_out, "-");
     lv_obj_align(*value_out, LV_ALIGN_BOTTOM_LEFT, 0, 0);
     return card;
 }
@@ -393,7 +403,7 @@ lv_obj_t *screen_main_create(void)
     /* Device ID — left-anchored, fixed width so it doesn't push icons */
     s_device_lbl = lv_label_create(topbar);
     lv_obj_set_style_text_color(s_device_lbl, UI_COLOR_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(s_device_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_device_lbl, ui_font_small(), 0);
     lv_label_set_long_mode(s_device_lbl, LV_LABEL_LONG_CLIP);
     lv_obj_set_width(s_device_lbl, 320);
     lv_label_set_text(s_device_lbl, "p4-...");
@@ -402,25 +412,36 @@ lv_obj_t *screen_main_create(void)
     /* Clock — right-anchored, fixed width */
     s_clock_lbl = lv_label_create(topbar);
     lv_obj_set_style_text_color(s_clock_lbl, UI_COLOR_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(s_clock_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(s_clock_lbl, ui_font_small(), 0);
     lv_obj_set_width(s_clock_lbl, 110);
     lv_obj_set_style_text_align(s_clock_lbl, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(s_clock_lbl, "--:--:--");
     lv_obj_align(s_clock_lbl, LV_ALIGN_RIGHT_MID, 0, 0);
 
-    /* MQTT text label — sits left of clock */
-    s_mqtt_lbl = lv_label_create(topbar);
-    lv_obj_set_style_text_font(s_mqtt_lbl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(s_mqtt_lbl, UI_COLOR_TEXT_DIM, 0);
-    lv_label_set_text(s_mqtt_lbl, "MQTT");
-    lv_obj_align_to(s_mqtt_lbl, s_clock_lbl, LV_ALIGN_OUT_LEFT_MID, -16, 0);
+    /* Center group — WiFi icon + MQTT label in a flex row */
+    lv_obj_t *center_group = lv_obj_create(topbar);
+    lv_obj_set_size(center_group, LV_SIZE_CONTENT, 44);
+    lv_obj_align_to(center_group, s_clock_lbl, LV_ALIGN_OUT_LEFT_MID, -12, 0);
+    lv_obj_set_style_bg_opa(center_group, 0, 0);
+    lv_obj_set_style_border_width(center_group, 0, 0);
+    lv_obj_set_style_pad_all(center_group, 0, 0);
+    lv_obj_set_style_pad_column(center_group, 8, 0);
+    lv_obj_set_flex_flow(center_group, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(center_group, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(center_group, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* WiFi icon — sits left of MQTT */
-    s_wifi_icon = lv_label_create(topbar);
+    /* WiFi icon — always Montserrat, LV_SYMBOL is LVGL-specific */
+    s_wifi_icon = lv_label_create(center_group);
     lv_obj_set_style_text_font(s_wifi_icon, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_wifi_icon, UI_COLOR_TEXT_DIM, 0);
     lv_label_set_text(s_wifi_icon, LV_SYMBOL_WIFI);
-    lv_obj_align_to(s_wifi_icon, s_mqtt_lbl, LV_ALIGN_OUT_LEFT_MID, -16, 0);
+
+    /* MQTT label */
+    s_mqtt_lbl = lv_label_create(center_group);
+    lv_obj_set_style_text_font(s_mqtt_lbl, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(s_mqtt_lbl, UI_COLOR_TEXT_DIM, 0);
+    lv_label_set_text(s_mqtt_lbl, "MQTT");
 
     /* ----- Right panel (model info + actions) ----- */
     const int RIGHT_W = 280;
@@ -439,8 +460,8 @@ lv_obj_t *screen_main_create(void)
 
     lv_obj_t *picker_lbl = lv_label_create(right);
     lv_obj_set_style_text_color(picker_lbl, UI_COLOR_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(picker_lbl, &lv_font_montserrat_14, 0);
-    lv_label_set_text(picker_lbl, "select model");
+    lv_obj_set_style_text_font(picker_lbl, ui_font_small(), 0);
+    lv_label_set_text(picker_lbl, TR(main_select_model));
 
     s_model_dropdown = lv_dropdown_create(right);
     lv_obj_set_width(s_model_dropdown, LV_PCT(100));
@@ -448,12 +469,23 @@ lv_obj_t *screen_main_create(void)
     lv_obj_set_style_bg_color(s_model_dropdown, UI_COLOR_PANEL, 0);
     lv_obj_set_style_text_color(s_model_dropdown, UI_COLOR_TEXT, 0);
     lv_obj_set_style_border_color(s_model_dropdown, UI_COLOR_BORDER, 0);
+
+    // Main part: JP font for the selected text
+    lv_obj_set_style_text_font(s_model_dropdown, ui_font_small(), LV_PART_MAIN);
+
+    // Indicator (arrow symbol): keep Montserrat so the arrow renders correctly
+    lv_obj_set_style_text_font(s_model_dropdown, &lv_font_montserrat_16, LV_PART_INDICATOR);
+
+    // List popup: JP font
+    lv_obj_t *list = lv_dropdown_get_list(s_model_dropdown);
+    lv_obj_set_style_text_font(list, ui_font_small(), 0);
+
     lv_obj_add_event_cb(s_model_dropdown, on_model_picked, LV_EVENT_VALUE_CHANGED, NULL);
 
-    make_field(right, "model", &s_model_lbl);
-    make_field(right, "upper", &s_upper_lbl);
-    make_field(right, "standard", &s_std_lbl);
-    make_field(right, "lower", &s_lower_lbl);
+    make_field(right, TR(main_field_model), &s_model_lbl);
+    make_field(right, TR(main_field_upper), &s_upper_lbl);
+    make_field(right, TR(main_field_std), &s_std_lbl);
+    make_field(right, TR(main_field_lower), &s_lower_lbl);
 
     lv_obj_t *spacer = lv_obj_create(right);
     lv_obj_set_size(spacer, LV_PCT(100), 4);
@@ -477,7 +509,8 @@ lv_obj_t *screen_main_create(void)
     lv_obj_set_style_radius(models_btn, UI_RADIUS_S, 0);
     lv_obj_add_event_cb(models_btn, on_models_btn, LV_EVENT_CLICKED, NULL);
     lv_obj_t *ml = lv_label_create(models_btn);
-    lv_label_set_text(ml, "models");
+    lv_label_set_text(ml, TR(main_btn_models));
+    lv_obj_set_style_text_font(ml, ui_font_small(), 0);
     lv_obj_center(ml);
 
     lv_obj_t *setup_btn = lv_btn_create(brow1);
@@ -487,7 +520,8 @@ lv_obj_t *screen_main_create(void)
     lv_obj_set_style_radius(setup_btn, UI_RADIUS_S, 0);
     lv_obj_add_event_cb(setup_btn, on_settings_btn, LV_EVENT_CLICKED, NULL);
     lv_obj_t *sl = lv_label_create(setup_btn);
-    lv_label_set_text(sl, "setup");
+    lv_label_set_text(sl, TR(main_btn_setup));
+    lv_obj_set_style_text_font(sl, ui_font_small(), 0);
     lv_obj_center(sl);
 
     s_runstop_btn = lv_btn_create(right);
@@ -496,8 +530,8 @@ lv_obj_t *screen_main_create(void)
     lv_obj_set_style_radius(s_runstop_btn, UI_RADIUS, 0);
     lv_obj_add_event_cb(s_runstop_btn, on_runstop_btn, LV_EVENT_CLICKED, NULL);
     s_runstop_lbl = lv_label_create(s_runstop_btn);
-    lv_label_set_text(s_runstop_lbl, "READY");
-    lv_obj_set_style_text_font(s_runstop_lbl, &lv_font_montserrat_28, 0);
+    lv_label_set_text(s_runstop_lbl, TR(main_btn_ready));
+    lv_obj_set_style_text_font(s_runstop_lbl, ui_font_large(), 0);
     lv_obj_set_style_text_color(s_runstop_lbl, UI_COLOR_TEXT, 0);
     lv_obj_center(s_runstop_lbl);
 
@@ -521,7 +555,7 @@ lv_obj_t *screen_main_create(void)
 
     s_status_pill_lbl = lv_label_create(s_status_pill);
     lv_obj_set_style_text_color(s_status_pill_lbl, UI_COLOR_TEXT, 0);
-    lv_obj_set_style_text_font(s_status_pill_lbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_status_pill_lbl, ui_font_small(), 0);
     lv_label_set_text(s_status_pill_lbl, "IDLE");
     lv_obj_center(s_status_pill_lbl);
 
@@ -534,7 +568,7 @@ lv_obj_t *screen_main_create(void)
 
     s_unit_lbl = lv_label_create(s_weight_card);
     lv_obj_set_style_text_color(s_unit_lbl, UI_COLOR_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(s_unit_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(s_unit_lbl, ui_font_large(), 0);
     lv_label_set_text(s_unit_lbl, "g");
     lv_obj_align_to(s_unit_lbl, s_weight_lbl, LV_ALIGN_OUT_BOTTOM_MID, 0, 40);
 
@@ -552,7 +586,7 @@ lv_obj_t *screen_main_create(void)
 
     s_alert_text = lv_label_create(s_alert_banner);
     lv_obj_set_style_text_color(s_alert_text, UI_COLOR_TEXT, 0);
-    lv_obj_set_style_text_font(s_alert_text, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_alert_text, ui_font_normal(), 0);
     lv_label_set_text(s_alert_text, "");
     lv_obj_align(s_alert_text, LV_ALIGN_LEFT_MID, 0, 0);
 
@@ -563,7 +597,7 @@ lv_obj_t *screen_main_create(void)
     lv_obj_set_style_radius(dismiss, UI_RADIUS_S, 0);
     lv_obj_add_event_cb(dismiss, on_alert_dismiss, LV_EVENT_CLICKED, NULL);
     lv_obj_t *dl = lv_label_create(dismiss);
-    lv_label_set_text(dl, "dismiss");
+    lv_label_set_text(dl, TR(main_btn_dismiss));
     lv_obj_center(dl);
 
     s_refresh_timer = lv_timer_create(refresh_cb, 100, NULL);

@@ -35,6 +35,10 @@ extern "C"
     /* Switch to the given screen (safe to call from any task) */
     void weight_ui_show(ui_screen_id_t id);
 
+    void weight_ui_destroy_screen(ui_screen_id_t id);
+
+    void screen_main_cleanup(void);
+
     /* ---------------------------------------------------------------------------
      * Screen builder forward declarations
      * Each returns the screen root lv_obj_t * (a screen created with

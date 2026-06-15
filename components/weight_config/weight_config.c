@@ -28,6 +28,7 @@ static void apply_defaults(weight_config_t *c)
     c->audio_muted = false;
     c->mqtt_port = 8883;
     c->mqtt_tls = true;
+    c->lang = 0;
 }
 
 #define LOAD_U8(handle, key, dst)                  \
@@ -107,6 +108,7 @@ esp_err_t weight_config_init(void)
     LOAD_STR(h, "muser", s_cfg.mqtt_user);
     LOAD_STR(h, "mpass", s_cfg.mqtt_pass);
     LOAD_BOOL(h, "mtls", s_cfg.mqtt_tls);
+    LOAD_U8(h, "lang", s_cfg.lang);
 
     nvs_close(h);
     ESP_LOGI(TAG, "config loaded (dec=%d unit=%s baud=%lu vol=%d mqtt=%s:%d tls=%d)",
@@ -208,6 +210,7 @@ esp_err_t weight_config_save(void)
     nvs_set_str(h, "muser", s_cfg.mqtt_user);
     nvs_set_str(h, "mpass", s_cfg.mqtt_pass);
     nvs_set_u8(h, "mtls", s_cfg.mqtt_tls ? 1 : 0);
+    nvs_set_u8(h, "lang", s_cfg.lang);
 
     err = nvs_commit(h);
     nvs_close(h);
@@ -239,3 +242,7 @@ void weight_config_set_tenant(const char *tenant_id, const char *tenant_short)
     if (tenant_short)
         strlcpy(s_cfg.tenant_short, tenant_short, sizeof(s_cfg.tenant_short));
 }
+
+int weight_config_get_lang(void) { return (int)s_cfg.lang; }
+
+void weight_config_set_lang(int l) { s_cfg.lang = (uint8_t)(l & 0x01); }

@@ -27,8 +27,8 @@
 #include "weight_ui.h"
 #include "weight_config.h"
 #include "weight_model_store.h"
+#include "weight_i18n.h"
 
-/* Index of model the user picked (-1 = new model). Passed to edit screen. */
 static int s_edit_index = -1;
 int screen_model_edit_get_index(void) { return s_edit_index; }
 void screen_model_edit_set_index(int idx) { s_edit_index = idx; }
@@ -58,8 +58,7 @@ static void on_row_click(lv_event_t *e)
 }
 
 /* ---------------------------------------------------------------------------
- * List builder - only called from on_screen_load or after edits, never
- * during screen construction, so the model store mutex always exists.
+ * List builder
  * --------------------------------------------------------------------------- */
 static void rebuild_list(void)
 {
@@ -70,7 +69,7 @@ static void rebuild_list(void)
     size_t alive = 0;
     char buf[32];
 
-    /* Column header row */
+    /* Column header */
     lv_obj_t *hdr = lv_obj_create(s_list_container);
     lv_obj_set_size(hdr, LV_PCT(100), 28);
     lv_obj_set_style_bg_opa(hdr, 0, 0);
@@ -79,13 +78,19 @@ static void rebuild_list(void)
     lv_obj_set_style_pad_ver(hdr, 4, 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
-    static const char *cols[] = {"name", "lower", "standard", "upper", ""};
+    const char *cols[] = {
+        TR(models_col_name),
+        TR(models_col_lower),
+        TR(models_col_standard),
+        TR(models_col_upper),
+        ""};
     static const int col_x[] = {0, 500, 700, 900, 1100};
+
     for (int i = 0; i < 5; i++)
     {
         lv_obj_t *l = lv_label_create(hdr);
         lv_obj_set_style_text_color(l, UI_COLOR_TEXT_DIM, 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(l, ui_font_small(), 0);
         lv_label_set_text(l, cols[i]);
         lv_obj_align(l, LV_ALIGN_LEFT_MID, col_x[i], 0);
     }
@@ -110,56 +115,52 @@ static void rebuild_list(void)
         lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(row, on_row_click, LV_EVENT_CLICKED, (void *)(intptr_t)i);
 
+        /* Model name — user-entered, keep ui_font_normal for readability */
         lv_obj_t *name = lv_label_create(row);
         lv_obj_set_style_text_color(name, UI_COLOR_TEXT, 0);
-        lv_obj_set_style_text_font(name, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(name, ui_font_normal(), 0);
         lv_label_set_text(name, m.name);
         lv_obj_align(name, LV_ALIGN_LEFT_MID, col_x[0], 0);
 
         snprintf(buf, sizeof(buf), "%.*f", cfg->decimal_places, m.lower_limit);
         lv_obj_t *lo = lv_label_create(row);
         lv_obj_set_style_text_color(lo, UI_COLOR_TEXT, 0);
-        lv_obj_set_style_text_font(lo, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(lo, ui_font_normal(), 0);
         lv_label_set_text(lo, buf);
         lv_obj_align(lo, LV_ALIGN_LEFT_MID, col_x[1], 0);
 
         snprintf(buf, sizeof(buf), "%.*f", cfg->decimal_places, m.standard);
         lv_obj_t *st = lv_label_create(row);
         lv_obj_set_style_text_color(st, UI_COLOR_TEXT, 0);
-        lv_obj_set_style_text_font(st, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(st, ui_font_normal(), 0);
         lv_label_set_text(st, buf);
         lv_obj_align(st, LV_ALIGN_LEFT_MID, col_x[2], 0);
 
         snprintf(buf, sizeof(buf), "%.*f", cfg->decimal_places, m.upper_limit);
         lv_obj_t *up = lv_label_create(row);
         lv_obj_set_style_text_color(up, UI_COLOR_TEXT, 0);
-        lv_obj_set_style_text_font(up, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(up, ui_font_normal(), 0);
         lv_label_set_text(up, buf);
         lv_obj_align(up, LV_ALIGN_LEFT_MID, col_x[3], 0);
     }
 
-    /* Update title with live count */
+    /* Title with count */
     char title[64];
-    snprintf(title, sizeof(title), "Models (%u)", (unsigned)alive);
+    snprintf(title, sizeof(title), TR(models_title_fmt), (unsigned)alive);
     lv_label_set_text(s_title_lbl, title);
 
+    /* Empty state */
     if (alive == 0)
     {
         lv_obj_t *empty = lv_label_create(s_list_container);
         lv_obj_set_style_text_color(empty, UI_COLOR_TEXT_DIM, 0);
-        lv_obj_set_style_text_font(empty, &lv_font_montserrat_18, 0);
-        lv_label_set_text(empty, "no models yet - tap + New model");
+        lv_obj_set_style_text_font(empty, ui_font_normal(), 0);
+        lv_label_set_text(empty, TR(models_empty));
         lv_obj_set_style_pad_all(empty, 40, 0);
     }
 }
 
-/* Re-render when becoming visible so MQTT-synced changes show up.
- * This is the ONLY place rebuild_list() is called at construction time;
- * the store mutex is guaranteed to exist by the time this fires. */
-static void on_screen_load(lv_event_t *e)
-{
-    rebuild_list();
-}
+static void on_screen_load(lv_event_t *e) { rebuild_list(); }
 
 /* ---------------------------------------------------------------------------
  * Build screen
@@ -170,9 +171,6 @@ lv_obj_t *screen_models_create(void)
     lv_obj_set_style_bg_color(scr, UI_COLOR_BG, 0);
     lv_obj_set_style_pad_all(scr, 0, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
-
-    /* Register load handler FIRST - rebuild_list fires lazily on display,
-     * never during construction, so the model store is always ready. */
     lv_obj_add_event_cb(scr, on_screen_load, LV_EVENT_SCREEN_LOADED, NULL);
 
     /* Top bar */
@@ -185,30 +183,44 @@ lv_obj_t *screen_models_create(void)
     lv_obj_set_style_pad_hor(topbar, UI_PAD, 0);
     lv_obj_clear_flag(topbar, LV_OBJ_FLAG_SCROLLABLE);
 
+    /* Back button */
     lv_obj_t *back = lv_btn_create(topbar);
-    lv_obj_set_size(back, 100, 40);
+    lv_obj_set_size(back, 120, 40);
     lv_obj_align(back, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_set_style_bg_color(back, UI_COLOR_PANEL_ALT, 0);
     lv_obj_set_style_radius(back, UI_RADIUS_S, 0);
     lv_obj_add_event_cb(back, on_back, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *bl = lv_label_create(back);
-    lv_label_set_text(bl, LV_SYMBOL_LEFT "  back");
-    lv_obj_center(bl);
 
+    lv_obj_t *back_sym = lv_label_create(back);
+    lv_obj_set_style_text_font(back_sym, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_color(back_sym, UI_COLOR_TEXT, 0);
+    lv_label_set_text(back_sym, LV_SYMBOL_LEFT);
+    lv_obj_align(back_sym, LV_ALIGN_LEFT_MID, 6, 0);
+
+    lv_obj_t *back_txt = lv_label_create(back);
+    lv_obj_set_style_text_font(back_txt, ui_font_small(), 0);
+    lv_obj_set_style_text_color(back_txt, UI_COLOR_TEXT, 0);
+    lv_label_set_text(back_txt, TR(settings_back));
+    lv_obj_align_to(back_txt, back_sym, LV_ALIGN_OUT_RIGHT_MID, 4, 0);
+
+    /* Title */
     s_title_lbl = lv_label_create(topbar);
     lv_obj_set_style_text_color(s_title_lbl, UI_COLOR_TEXT, 0);
-    lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_24, 0);
-    lv_label_set_text(s_title_lbl, "Models");
+    lv_obj_set_style_text_font(s_title_lbl, ui_font_large(), 0);
+    lv_label_set_text(s_title_lbl, TR(models_title_fmt));
     lv_obj_align(s_title_lbl, LV_ALIGN_CENTER, 0, 0);
 
+    /* New model button */
     lv_obj_t *new_btn = lv_btn_create(topbar);
-    lv_obj_set_size(new_btn, 160, 40);
+    lv_obj_set_size(new_btn, 180, 40);
     lv_obj_align(new_btn, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_bg_color(new_btn, UI_COLOR_PASS_DARK, 0);
     lv_obj_set_style_radius(new_btn, UI_RADIUS_S, 0);
     lv_obj_add_event_cb(new_btn, on_new, LV_EVENT_CLICKED, NULL);
     lv_obj_t *nl = lv_label_create(new_btn);
-    lv_label_set_text(nl, "+ New model");
+    lv_label_set_text(nl, TR(models_new));
+    lv_obj_set_style_text_font(nl, ui_font_small(), 0);
+    lv_obj_set_style_text_color(nl, UI_COLOR_TEXT, 0);
     lv_obj_center(nl);
 
     /* Scrollable list container */
@@ -221,11 +233,6 @@ lv_obj_t *screen_models_create(void)
     lv_obj_set_style_pad_all(s_list_container, UI_PAD, 0);
     lv_obj_set_flex_flow(s_list_container, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(s_list_container, UI_PAD_S, 0);
-    /* Scrollable - leave LV_OBJ_FLAG_SCROLLABLE set (default) */
-
-    /* NOTE: do NOT call rebuild_list() here. It will be called by
-     * on_screen_load when this screen first becomes active, by which point
-     * weight_model_store_init() has already run in app_main. */
 
     return scr;
 }

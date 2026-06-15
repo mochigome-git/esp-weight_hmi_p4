@@ -9,8 +9,12 @@ idf_component_register(
         "screens/screen_mqtt.c"
         "screens/ui_loading.c"
         "screens/screen_keyboard.c"
+        "i18n/weight_i18n.c"   
         "fonts/lv_font_montserrat_bold_178.c"
-    INCLUDE_DIRS "include"
+        "fonts/lv_font_nato_sans_jp_bold_14.c"
+        "fonts/lv_font_nato_sans_jp_bold_16.c"
+        "fonts/lv_font_nato_sans_jp_bold_24.c"
+    INCLUDE_DIRS "include"  "i18n"  
     PRIV_INCLUDE_DIRS "screens"
     REQUIRES
         esp_timer

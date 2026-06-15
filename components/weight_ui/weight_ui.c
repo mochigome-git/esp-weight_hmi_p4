@@ -29,6 +29,15 @@ static const char *TAG = "ui";
 /* One slot per screen id - sized by the sentinel enum value */
 static lv_obj_t *s_screens[UI_SCREEN_COUNT];
 
+void weight_ui_destroy_screen(ui_screen_id_t id)
+{
+    if (s_screens[id])
+    {
+        lv_obj_del(s_screens[id]);
+        s_screens[id] = NULL;
+    }
+}
+
 esp_err_t weight_ui_init(void)
 {
     ESP_LOGI(TAG, "starting BSP display...");
