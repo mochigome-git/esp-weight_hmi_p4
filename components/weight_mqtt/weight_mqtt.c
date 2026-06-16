@@ -154,7 +154,7 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
             };
             esp_timer_create(&args, &s_heartbeat_timer);
         }
-        esp_timer_start_periodic(s_heartbeat_timer, 180ULL * 1000000ULL); /* 3 min */
+        esp_timer_start_periodic(s_heartbeat_timer, 30ULL * 1000000ULL); /* 30 sec */
         break;
 
     case MQTT_EVENT_DISCONNECTED:
