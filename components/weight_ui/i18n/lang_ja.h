@@ -114,10 +114,10 @@ static const weight_lang_t LANG_JA = {
     .mqtt_pass = "パスワード",
     .mqtt_connect = "接続",
     .mqtt_host_placeholder = "broker.example.com",
-    .mqtt_user_placeholder = "(任意)",
-    .mqtt_pass_placeholder = "(任意)",
+    .mqtt_user_placeholder = "(optional)",
+    .mqtt_pass_placeholder = "(optional)",
     .mqtt_host_required = "ホストを入力してください",
     .mqtt_port_invalid = "1-65535",
-    .mqtt_connecting = "MQTTブローカーに接続中...",
+    .mqtt_connecting = "Connecting to MQTT broker...",
     .mqtt_connect_failed = "接続失敗 - 設定を確認してください",
 };

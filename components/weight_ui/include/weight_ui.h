@@ -39,6 +39,17 @@ extern "C"
 
     void screen_main_cleanup(void);
 
+    void screen_main_cleanup(void);
+
+    void screen_settings_cleanup(void);
+
+    void screen_wifi_cleanup(void);
+
+    /* Destroy a screen and rebuild+load it fresh. Safe to call for the
+     * currently-active screen: the new one is loaded before the old one
+     * is deleted. */
+    void weight_ui_rebuild_screen(ui_screen_id_t id);
+
     /* ---------------------------------------------------------------------------
      * Screen builder forward declarations
      * Each returns the screen root lv_obj_t * (a screen created with

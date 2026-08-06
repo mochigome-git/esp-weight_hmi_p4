@@ -21,9 +21,10 @@ void weight_time_init(void)
         return;
     s_started = true;
 
-    /* Malaysia: MYT = UTC+8, no DST.
-     * POSIX TZ sign is inverted: "MYT-8" means UTC+8. */
-    setenv("TZ", "MYT-8", 1);
+    /* Malaysia: MYT = MYT-8, no DST.
+     * Japan: JST = JST+9, no DST.
+     * POSIX TZ sign is inverted: "JST-9" means UTC+9. */
+    setenv("TZ", "JST-9", 1);
     tzset();
 
     esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);

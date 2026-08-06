@@ -19,6 +19,7 @@
 #include "mqtt_client.h"
 #include "cJSON.h"
 #include "esp_timer.h"
+#include "freertos/semphr.h"
 
 #define FW_VERSION "1.0.0"
 
@@ -29,6 +30,7 @@ static bool s_connected = false;
 static time_t s_machine_start = 0;
 static time_t s_machine_stop = 0;
 static esp_timer_handle_t s_heartbeat_timer = NULL;
+static SemaphoreHandle_t s_mqtt_mutex = NULL;
 
 /* Heap-allocated buffers for topics, computed once after init.
  * Max topic length: "{16 short}/{37 device_id}/sync/req" ~= 64, plus headroom. */
@@ -275,10 +277,18 @@ esp_err_t weight_mqtt_publish_model_push(const weight_model_t *m)
 
 esp_err_t weight_mqtt_init(void)
 {
+
     /* Phase 1: set up internal state only. Do NOT create the MQTT client yet.
      * MQTT needs (a) a valid broker host and (b) WiFi connectivity. Both come
      * later - the WiFi handler calls weight_mqtt_start_if_ready() on GOT_IP,
      * and the settings UI calls it after a broker host is saved. */
+    s_mqtt_mutex = xSemaphoreCreateMutex();
+    if (!s_mqtt_mutex)
+    {
+        ESP_LOGE(TAG, "failed to create mqtt mutex");
+        return ESP_ERR_NO_MEM;
+    }
+
     weight_state_snapshot_t snap;
     weight_state_get_snapshot(&snap);
     build_topics(&snap);
@@ -286,7 +296,6 @@ esp_err_t weight_mqtt_init(void)
     ESP_LOGI(TAG, "init (deferred start - waits for WiFi + broker config)");
     return ESP_OK;
 }
-
 /* Build the actual client + start it. Safe to call repeatedly - no-op if
  * already started, no-op if broker host empty. */
 esp_err_t weight_mqtt_start_if_ready(void)
@@ -389,7 +398,7 @@ esp_err_t weight_mqtt_start_if_ready(void)
     return esp_mqtt_client_start(s_client);
 }
 
-esp_err_t weight_mqtt_restart(void)
+static esp_err_t weight_mqtt_restart_locked(void)
 {
     ESP_LOGI(TAG, "restart called - rebuilding topics and client");
 
@@ -402,13 +411,10 @@ esp_err_t weight_mqtt_restart(void)
         weight_state_set_mqtt(false);
     }
 
-    /* Build topics using config device_id directly, not snapshot */
     const weight_config_t *cfg = weight_config_get();
-
     weight_state_snapshot_t snap;
     weight_state_get_snapshot(&snap);
 
-    /* Patch snap with the correct device_id from config */
     const char *dev_id = cfg->device_id[0] ? cfg->device_id : snap.device_id;
     snprintf(s_topic_reading, sizeof(s_topic_reading), "%s/%s/weight", snap.tenant_short, dev_id);
     snprintf(s_topic_status, sizeof(s_topic_status), "%s/%s/status", snap.tenant_short, dev_id);
@@ -422,6 +428,27 @@ esp_err_t weight_mqtt_restart(void)
     ESP_LOGI(TAG, "  sync_sub: %s", s_topic_sync_sub);
 
     return weight_mqtt_start_if_ready();
+}
+
+esp_err_t weight_mqtt_restart(void)
+{
+    if (!s_mqtt_mutex)
+    {
+        ESP_LOGE(TAG, "restart called before weight_mqtt_init()");
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (xSemaphoreTake(s_mqtt_mutex, pdMS_TO_TICKS(10000)) != pdTRUE)
+    {
+        ESP_LOGW(TAG, "restart: could not acquire mqtt lock, skipping "
+                      "(another restart is likely already in progress)");
+        return ESP_ERR_TIMEOUT;
+    }
+
+    esp_err_t err = weight_mqtt_restart_locked();
+
+    xSemaphoreGive(s_mqtt_mutex);
+    return err;
 }
 
 esp_err_t weight_mqtt_publish_reading(float value, weight_status_t status, time_t ts)

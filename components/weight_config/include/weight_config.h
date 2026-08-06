@@ -23,6 +23,9 @@ extern "C"
 #define WCFG_MAX_CA_CERT_LEN 4096 /* fits typical Let's Encrypt + chain */
 #define WCFG_MAX_WIFI_SSID_LEN 33
 #define WCFG_MAX_WIFI_PASS_LEN 65
+#define WCFG_MAX_IP_STR_LEN 16 /* fits "255.255.255.255" + NUL */
+#define WCFG_MAX_DEVICE_NAME_LEN 32
+#define WCFG_MAX_DEVICE_ID_LEN 40
 
     typedef enum
     {
@@ -36,7 +39,8 @@ extern "C"
     {
 
         /* Device */
-        char device_id[32];
+        char device_id[WCFG_MAX_DEVICE_ID_LEN];     /* was char device_id[32] */
+        char device_name[WCFG_MAX_DEVICE_NAME_LEN]; /* short, human-readable label for display only */
         char tenant_id[64];
         char tenant_short[16];
 
@@ -61,6 +65,14 @@ extern "C"
         char wifi_ssid[WCFG_MAX_WIFI_SSID_LEN];
         char wifi_pass[WCFG_MAX_WIFI_PASS_LEN];
 
+        /* WiFi static IP - if wifi_use_static is false, DHCP is used and
+         * the ip/gw/netmask/dns fields below are ignored. */
+        bool wifi_use_static;
+        char wifi_ip[WCFG_MAX_IP_STR_LEN];
+        char wifi_gw[WCFG_MAX_IP_STR_LEN];
+        char wifi_netmask[WCFG_MAX_IP_STR_LEN];
+        char wifi_dns[WCFG_MAX_IP_STR_LEN];
+
         /* MQTT (EMQX with TLS + basic auth) */
         char mqtt_host[WCFG_MAX_HOST_LEN];
         uint16_t mqtt_port; /* typically 8883 */
@@ -80,6 +92,7 @@ extern "C"
     int weight_config_get_lang(void);
     void weight_config_set_lang(int lang);
     void weight_config_set_device_id(const char *id);
+    void weight_config_set_device_name(const char *name);
     void weight_config_set_tenant(const char *tenant_id, const char *tenant_short);
     void weight_config_set_decimal(uint8_t d);
     void weight_config_set_unit(wcfg_unit_t u);
@@ -88,6 +101,12 @@ extern "C"
     void weight_config_set_stability(uint8_t window, float tolerance);
     void weight_config_set_audio(uint8_t volume, bool muted);
     void weight_config_set_wifi(const char *ssid, const char *pass);
+    /* Static IP. Pass use_static=false to revert to DHCP (ip/gw/netmask/dns
+     * may be NULL/"" in that case). gw/netmask are required whenever
+     * use_static is true; dns may be NULL/"" to leave DNS unset. */
+    void weight_config_set_static_ip(bool use_static, const char *ip,
+                                     const char *gw, const char *netmask,
+                                     const char *dns);
     void weight_config_set_mqtt(const char *host, uint16_t port,
                                 const char *user, const char *pass, bool tls);
 

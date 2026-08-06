@@ -47,9 +47,21 @@ static lv_obj_t *s_alert_text;
 static lv_obj_t *s_model_dropdown;
 static size_t s_last_model_count = (size_t)-1;
 
+static lv_timer_t *s_resume_delay_timer = NULL;
+
+static weight_status_t s_last_card_status = (weight_status_t)-1;
 /* ---------------------------------------------------------------------------
  * Helpers
  * --------------------------------------------------------------------------- */
+
+static void set_text_if_changed(lv_obj_t *lbl, const char *txt)
+{
+    const char *cur = lv_label_get_text(lbl);
+    if (cur && strcmp(cur, txt) == 0)
+        return; /* identical — skip realloc + invalidate + redraw */
+    lv_label_set_text(lbl, txt);
+}
+
 static void format_weight(char *out, size_t out_len, float v, uint8_t dec)
 {
     snprintf(out, out_len, "%.*f", dec, v);
@@ -58,6 +70,10 @@ static void format_weight(char *out, size_t out_len, float v, uint8_t dec)
 static void set_card_color(weight_status_t s)
 {
     lv_color_t bg;
+
+    if (s == s_last_card_status)
+        return;
+
     switch (s)
     {
     case WEIGHT_STATUS_PASS:
@@ -108,25 +124,71 @@ static void rebuild_model_dropdown(void)
 /* ---------------------------------------------------------------------------
  * Event handlers
  * --------------------------------------------------------------------------- */
+static void resume_refresh_timer_cb(void *unused)
+{
+    if (s_refresh_timer)
+        lv_timer_resume(s_refresh_timer);
+}
+
+static void apply_fonts(void)
+{
+    lv_obj_set_style_text_font(s_device_lbl, ui_font_small(), 0);
+    lv_obj_set_style_text_font(s_clock_lbl, ui_font_small(), 0);
+    lv_obj_set_style_text_font(s_mqtt_lbl, &lv_font_montserrat_16, 0); /* stays Montserrat by design */
+    lv_obj_set_style_text_font(s_status_pill_lbl, ui_font_small(), 0);
+    lv_obj_set_style_text_font(s_model_dropdown, ui_font_small(), LV_PART_MAIN);
+    lv_obj_set_style_text_font(s_runstop_lbl, ui_font_large(), 0);
+    /* + the make_field() labels if you keep pointers to their label/value objs */
+}
+
+static void resume_delay_timer_cb(lv_timer_t *t)
+{
+    if (s_refresh_timer)
+        lv_timer_resume(s_refresh_timer);
+    s_resume_delay_timer = NULL; /* LVGL auto-deletes (repeat_count=1) — do NOT lv_timer_del here */
+}
+
 static void on_screen_load(lv_event_t *e)
 {
     s_store_ready = true;
+    apply_fonts();
     rebuild_model_dropdown();
+
+    /* Delay resuming the 10Hz refresh timer by one display-refresh cycle
+     * so the giant weight label's first redraw doesn't land in the same
+     * frame as this screen's own transition redraw. lv_async_call alone
+     * isn't enough — a paused timer fires immediately on resume since it
+     * doesn't track elapsed time while paused, so it lands in the same
+     * lv_timer_handler() pass as the transition. A real delay avoids that. */
+    if (s_resume_delay_timer)
+    {
+        lv_timer_del(s_resume_delay_timer);
+        s_resume_delay_timer = NULL;
+    }
+    s_resume_delay_timer = lv_timer_create(resume_delay_timer_cb, 80, NULL);
+    lv_timer_set_repeat_count(s_resume_delay_timer, 1);
+}
+
+static void pause_refresh_timer_cb(void *unused)
+{
     if (s_refresh_timer)
-        lv_timer_resume(s_refresh_timer);
+        lv_timer_pause(s_refresh_timer);
 }
 
 static void on_models_btn(lv_event_t *e)
 {
     rebuild_model_dropdown();
+    if (s_refresh_timer)
+        lv_timer_pause(s_refresh_timer); /* synchronous, no async needed */
     weight_ui_show(UI_SCREEN_MODELS);
 }
 
 static void on_settings_btn(lv_event_t *e)
 {
+    if (s_refresh_timer)
+        lv_timer_pause(s_refresh_timer);
     weight_ui_show(UI_SCREEN_SETTINGS);
 }
-
 static void on_runstop_btn(lv_event_t *e)
 {
     weight_mode_t cur = weight_state_get_mode();
@@ -206,10 +268,10 @@ static void refresh_cb(lv_timer_t *t)
 
     /* Weight value */
     format_weight(buf, sizeof(buf), snap.last_reading, cfg->decimal_places);
-    lv_label_set_text(s_weight_lbl, buf);
+    set_text_if_changed(s_weight_lbl, buf);
 
     /* Unit */
-    lv_label_set_text(s_unit_lbl, weight_config_unit_str(cfg->unit));
+    set_text_if_changed(s_unit_lbl, weight_config_unit_str(cfg->unit));
 
     /* Status pill */
     const char *status_txt = TR(main_status_idle);
@@ -243,7 +305,7 @@ static void refresh_cb(lv_timer_t *t)
         status_txt = TR(main_status_idle_model);
     }
 
-    lv_label_set_text(s_status_pill_lbl, status_txt);
+    set_text_if_changed(s_status_pill_lbl, status_txt);
 
     /* Card color — only show PASS/HIGH/LOW after reading is stable.
      * Otherwise stay neutral (panel color) while operator is still placing item. */
@@ -257,7 +319,7 @@ static void refresh_cb(lv_timer_t *t)
     /* Right panel: active model info */
     if (snap.model.valid)
     {
-        lv_label_set_text(s_model_lbl, snap.model.name);
+        set_text_if_changed(s_model_lbl, snap.model.name);
         snprintf(buf, sizeof(buf), "%.*f", cfg->decimal_places, snap.model.upper_limit);
         lv_label_set_text(s_upper_lbl, buf);
         snprintf(buf, sizeof(buf), "%.*f", cfg->decimal_places, snap.model.standard);
@@ -276,12 +338,12 @@ static void refresh_cb(lv_timer_t *t)
     /* RUN/STOP button */
     if (snap.mode == WEIGHT_MODE_RUN)
     {
-        lv_label_set_text(s_runstop_lbl, TR(main_btn_stop));
+        set_text_if_changed(s_runstop_lbl, TR(main_btn_stop));
         lv_obj_set_style_bg_color(s_runstop_btn, UI_COLOR_HIGH_DARK, 0);
     }
     else
     {
-        lv_label_set_text(s_runstop_lbl, TR(main_btn_ready));
+        set_text_if_changed(s_runstop_lbl, TR(main_btn_ready));
         lv_obj_set_style_bg_color(s_runstop_btn, UI_COLOR_PASS_DARK, 0);
     }
 
@@ -306,13 +368,13 @@ static void refresh_cb(lv_timer_t *t)
     {
         snprintf(buf, sizeof(buf), "--:--:--");
     }
-    lv_label_set_text(s_clock_lbl, buf);
+    set_text_if_changed(s_clock_lbl, buf);
 
-    /* FIX: Device ID from config, not from state snapshot
-     * snap.device_id is set at boot and never updated after NVS write.
-     * cfg->device_id reflects the latest saved value. */
-    lv_label_set_text(s_device_lbl,
-                      cfg->device_id[0] ? cfg->device_id : snap.device_id);
+    /* Device name — human-readable label for display. Falls back to
+     * device_id if no name has been set yet (e.g. freshly flashed unit). */
+    set_text_if_changed(s_device_lbl,
+                        cfg->device_name[0] ? cfg->device_name
+                                            : (cfg->device_id[0] ? cfg->device_id : snap.device_id));
 
     /* Sticky alert banner */
     if (snap.alert_active)
@@ -341,8 +403,14 @@ void screen_main_cleanup(void)
         lv_timer_del(s_refresh_timer);
         s_refresh_timer = NULL;
     }
+    if (s_resume_delay_timer)
+    {
+        lv_timer_del(s_resume_delay_timer);
+        s_resume_delay_timer = NULL;
+    }
     s_store_ready = false;
     s_last_model_count = (size_t)-1;
+    s_last_card_status = (weight_status_t)-1;
 }
 
 /* ---------------------------------------------------------------------------

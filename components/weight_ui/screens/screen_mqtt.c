@@ -125,8 +125,10 @@ static void on_connect(lv_event_t *e)
     ESP_LOGI(TAG, "saving MQTT: %s:%ld tls=%d user='%s'", host, port, tls, user);
     weight_config_set_mqtt(host, (uint16_t)port, user, pass, tls);
     weight_config_save();
-    weight_mqtt_restart();
 
+    /* weight_mqtt_restart() runs inside mqtt_connect_task, not here - it
+     * touches esp-mqtt client state and isn't safe to call twice back to
+     * back or on the LVGL task (blocking, and races with the task below). */
     ui_loading_show(TR(mqtt_connecting));
     xTaskCreate(mqtt_connect_task, "mqtt_connect", 4096, NULL, 5, NULL);
     weight_ui_show(UI_SCREEN_SETTINGS);

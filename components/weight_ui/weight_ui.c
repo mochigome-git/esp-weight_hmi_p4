@@ -140,3 +140,21 @@ void weight_ui_show(ui_screen_id_t id)
 
     bsp_display_unlock();
 }
+
+void weight_ui_rebuild_screen(ui_screen_id_t id)
+{
+    if (id >= UI_SCREEN_COUNT)
+        return;
+
+    lv_obj_t *old = s_screens[id];
+    s_screens[id] = NULL; /* forces lazy rebuild inside weight_ui_show */
+    weight_ui_show(id);   /* builds new screen + lv_screen_load()s it */
+    if (old)
+    {
+        if (bsp_display_lock(pdMS_TO_TICKS(1000)) == ESP_OK)
+        {
+            lv_obj_del(old); /* old screen no longer active -> safe */
+            bsp_display_unlock();
+        }
+    }
+}

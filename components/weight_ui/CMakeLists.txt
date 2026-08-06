@@ -15,6 +15,7 @@ idf_component_register(
         "fonts/lv_font_nato_sans_jp_bold_16.c"
         "fonts/lv_font_nato_sans_jp_bold_24.c"
     INCLUDE_DIRS "include"  "i18n"  
+    EMBED_FILES "${CMAKE_SOURCE_DIR}/VERSION" "${CMAKE_SOURCE_DIR}/DEVICE_ID"
     PRIV_INCLUDE_DIRS "screens"
     REQUIRES
         esp_timer

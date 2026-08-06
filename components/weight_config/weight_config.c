@@ -16,8 +16,12 @@ static weight_config_t s_cfg;
 static void apply_defaults(weight_config_t *c)
 {
     memset(c, 0, sizeof(*c));
-    strlcpy(c->tenant_id, "00000000-0000-0000-0000-000000000000", sizeof(c->tenant_id));
-    strlcpy(c->tenant_short, "gim", sizeof(c->tenant_short));
+    strlcpy(c->tenant_id, "f00af313-35eb-4af0-9ce6-555eb48a6537", sizeof(c->tenant_id));
+    strlcpy(c->tenant_short, "gcl", sizeof(c->tenant_short));
+#ifdef DEFAULT_DEVICE_ID
+    strlcpy(c->device_id, DEFAULT_DEVICE_ID, sizeof(c->device_id));
+#endif
+
     c->decimal_places = 1;
     c->unit = WCFG_UNIT_G;
     c->uart_baud = 9600;
@@ -30,7 +34,6 @@ static void apply_defaults(weight_config_t *c)
     c->mqtt_tls = true;
     c->lang = 0;
 }
-
 #define LOAD_U8(handle, key, dst)                  \
     do                                             \
     {                                              \
@@ -102,7 +105,13 @@ esp_err_t weight_config_init(void)
     LOAD_BOOL(h, "mute", s_cfg.audio_muted);
     LOAD_STR(h, "wssid", s_cfg.wifi_ssid);
     LOAD_STR(h, "wpass", s_cfg.wifi_pass);
+    LOAD_BOOL(h, "wstatic", s_cfg.wifi_use_static);
+    LOAD_STR(h, "wip", s_cfg.wifi_ip);
+    LOAD_STR(h, "wgw", s_cfg.wifi_gw);
+    LOAD_STR(h, "wmask", s_cfg.wifi_netmask);
+    LOAD_STR(h, "wdns", s_cfg.wifi_dns);
     LOAD_STR(h, "devid", s_cfg.device_id);
+    LOAD_STR(h, "devname", s_cfg.device_name);
     LOAD_STR(h, "mhost", s_cfg.mqtt_host);
     LOAD_U16(h, "mport", s_cfg.mqtt_port);
     LOAD_STR(h, "muser", s_cfg.mqtt_user);
@@ -124,6 +133,10 @@ void weight_config_set_device_id(const char *id)
 {
     strlcpy(s_cfg.device_id, id, sizeof(s_cfg.device_id));
 }
+void weight_config_set_device_name(const char *name)
+{
+    strlcpy(s_cfg.device_name, name, sizeof(s_cfg.device_name));
+}
 void weight_config_set_decimal(uint8_t d) { s_cfg.decimal_places = (d > 3) ? 3 : d; }
 void weight_config_set_unit(wcfg_unit_t u) { s_cfg.unit = u; }
 void weight_config_set_uart_baud(uint32_t b) { s_cfg.uart_baud = b; }
@@ -142,6 +155,16 @@ void weight_config_set_wifi(const char *ssid, const char *pass)
 {
     strncpy(s_cfg.wifi_ssid, ssid, sizeof(s_cfg.wifi_ssid) - 1);
     strncpy(s_cfg.wifi_pass, pass, sizeof(s_cfg.wifi_pass) - 1);
+}
+void weight_config_set_static_ip(bool use_static, const char *ip,
+                                 const char *gw, const char *netmask,
+                                 const char *dns)
+{
+    s_cfg.wifi_use_static = use_static;
+    strncpy(s_cfg.wifi_ip, ip ? ip : "", sizeof(s_cfg.wifi_ip) - 1);
+    strncpy(s_cfg.wifi_gw, gw ? gw : "", sizeof(s_cfg.wifi_gw) - 1);
+    strncpy(s_cfg.wifi_netmask, netmask ? netmask : "", sizeof(s_cfg.wifi_netmask) - 1);
+    strncpy(s_cfg.wifi_dns, dns ? dns : "", sizeof(s_cfg.wifi_dns) - 1);
 }
 void weight_config_set_mqtt(const char *host, uint16_t port,
                             const char *user, const char *pass, bool tls)
@@ -204,7 +227,13 @@ esp_err_t weight_config_save(void)
     nvs_set_u8(h, "mute", s_cfg.audio_muted ? 1 : 0);
     nvs_set_str(h, "wssid", s_cfg.wifi_ssid);
     nvs_set_str(h, "wpass", s_cfg.wifi_pass);
+    nvs_set_u8(h, "wstatic", s_cfg.wifi_use_static ? 1 : 0);
+    nvs_set_str(h, "wip", s_cfg.wifi_ip);
+    nvs_set_str(h, "wgw", s_cfg.wifi_gw);
+    nvs_set_str(h, "wmask", s_cfg.wifi_netmask);
+    nvs_set_str(h, "wdns", s_cfg.wifi_dns);
     nvs_set_str(h, "devid", s_cfg.device_id);
+    nvs_set_str(h, "devname", s_cfg.device_name);
     nvs_set_str(h, "mhost", s_cfg.mqtt_host);
     nvs_set_u16(h, "mport", s_cfg.mqtt_port);
     nvs_set_str(h, "muser", s_cfg.mqtt_user);
