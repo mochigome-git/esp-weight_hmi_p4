@@ -7,20 +7,31 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 set(EXTRA_COMPONENT_DIRS "${CMAKE_SOURCE_DIR}/components")
 
-# Reads a UUID from a file at project root and exposes it as DEFAULT_<NAME>.
+
+# Reads a UUID from a file at project root and exposes it as DEFAULT_<name>.
 # Only used when NVS has no saved value (see weight_config.c).
 function(read_uuid_file name)
     set(path "${CMAKE_SOURCE_DIR}/${name}")
-    if(NOT EXISTS "${path}")
+
+    # GLOB + CONFIGURE_DEPENDS is re-checked on every build, so creating,
+    # editing or deleting the file triggers a reconfigure automatically.
+    # (A plain if(EXISTS) only runs at configure time - a file added later
+    # was never noticed, which is why MACHINE_ID was ignored.)
+    file(GLOB found CONFIGURE_DEPENDS "${path}")
+    if(NOT found)
         message(WARNING "${name} file not found - no default ${name} compiled in")
         return()
     endif()
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
 
-    file(STRINGS "${path}" val LIMIT_COUNT 1)
-    string(STRIP "${val}" val)
+    # First line that contains a hex digit (skips blank lines)
+    file(STRINGS "${path}" val REGEX "[0-9a-fA-F]" LIMIT_COUNT 1)
+    # Drop anything that isn't hex or '-': UTF-8 BOM, CR from CRLF, spaces,
+    # quotes - all common when the file is created in a Windows editor
+    string(REGEX REPLACE "[^0-9a-fA-F-]" "" val "${val}")
     string(TOLOWER "${val}" val)
     string(LENGTH "${val}" len)
+
     # CMake regex has no {n} quantifier, so check shape + length
     if(NOT len EQUAL 36 OR
        NOT val MATCHES "^[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+$")

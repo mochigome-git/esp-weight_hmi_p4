@@ -7,11 +7,33 @@
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "config";
 static const char *NS = "weight_cfg";
 
 static weight_config_t s_cfg;
+static SemaphoreHandle_t s_cfg_mtx; /* recursive */
+
+void weight_config_lock(void)
+{
+    if (s_cfg_mtx)
+        xSemaphoreTakeRecursive(s_cfg_mtx, portMAX_DELAY);
+}
+
+void weight_config_unlock(void)
+{
+    if (s_cfg_mtx)
+        xSemaphoreGiveRecursive(s_cfg_mtx);
+}
+
+void weight_config_copy(weight_config_t *out)
+{
+    weight_config_lock();
+    memcpy(out, &s_cfg, sizeof(*out));
+    weight_config_unlock();
+}
 
 static void apply_defaults(weight_config_t *c)
 {
@@ -145,6 +167,8 @@ static void apply_build_ids(void)
 
 esp_err_t weight_config_init(void)
 {
+    if (!s_cfg_mtx)
+        s_cfg_mtx = xSemaphoreCreateRecursiveMutex();
     apply_defaults(&s_cfg);
 
     nvs_handle_t h;
@@ -203,52 +227,91 @@ done:
 
 const weight_config_t *weight_config_get(void) { return &s_cfg; }
 
-void weight_config_set_device_id(const char *id)
-{
-    strlcpy(s_cfg.device_id, id, sizeof(s_cfg.device_id));
-}
-void weight_config_set_device_name(const char *name)
-{
-    strlcpy(s_cfg.device_name, name, sizeof(s_cfg.device_name));
-}
 void weight_config_set_decimal(uint8_t d) { s_cfg.decimal_places = (d > 3) ? 3 : d; }
 void weight_config_set_unit(wcfg_unit_t u) { s_cfg.unit = u; }
 void weight_config_set_uart_baud(uint32_t b) { s_cfg.uart_baud = b; }
 void weight_config_set_zero_threshold(float t) { s_cfg.zero_threshold = t; }
-void weight_config_set_stability(uint8_t w, float tol)
-{
-    s_cfg.stability_window = (w < 3) ? 3 : (w > 10 ? 10 : w);
-    s_cfg.stability_tolerance = tol;
-}
+
 void weight_config_set_audio(uint8_t v, bool m)
 {
     s_cfg.audio_volume = (v > 100) ? 100 : v;
     s_cfg.audio_muted = m;
 }
+
+void weight_config_set_device_id(const char *id)
+{
+    weight_config_lock();
+    strlcpy(s_cfg.device_id, id, sizeof(s_cfg.device_id));
+    weight_config_unlock();
+}
+
+void weight_config_set_device_name(const char *name)
+{
+    weight_config_lock();
+    strlcpy(s_cfg.device_name, name, sizeof(s_cfg.device_name));
+    weight_config_unlock();
+}
+
+void weight_config_set_stability(uint8_t w, float tol)
+{
+    weight_config_lock();
+    s_cfg.stability_window = (w < 3) ? 3 : (w > 10 ? 10 : w);
+    s_cfg.stability_tolerance = tol;
+    weight_config_unlock();
+}
+
 void weight_config_set_wifi(const char *ssid, const char *pass)
 {
+    weight_config_lock();
     strncpy(s_cfg.wifi_ssid, ssid, sizeof(s_cfg.wifi_ssid) - 1);
     strncpy(s_cfg.wifi_pass, pass, sizeof(s_cfg.wifi_pass) - 1);
+    weight_config_unlock();
 }
+
 void weight_config_set_static_ip(bool use_static, const char *ip,
                                  const char *gw, const char *netmask,
                                  const char *dns)
 {
+    weight_config_lock();
     s_cfg.wifi_use_static = use_static;
     strncpy(s_cfg.wifi_ip, ip ? ip : "", sizeof(s_cfg.wifi_ip) - 1);
     strncpy(s_cfg.wifi_gw, gw ? gw : "", sizeof(s_cfg.wifi_gw) - 1);
     strncpy(s_cfg.wifi_netmask, netmask ? netmask : "", sizeof(s_cfg.wifi_netmask) - 1);
     strncpy(s_cfg.wifi_dns, dns ? dns : "", sizeof(s_cfg.wifi_dns) - 1);
+    weight_config_unlock();
 }
+
 void weight_config_set_mqtt(const char *host, uint16_t port,
                             const char *user, const char *pass, bool tls)
 {
+    weight_config_lock();
     strncpy(s_cfg.mqtt_host, host, sizeof(s_cfg.mqtt_host) - 1);
     s_cfg.mqtt_port = port;
     strncpy(s_cfg.mqtt_user, user, sizeof(s_cfg.mqtt_user) - 1);
     strncpy(s_cfg.mqtt_pass, pass, sizeof(s_cfg.mqtt_pass) - 1);
     s_cfg.mqtt_tls = tls;
+    weight_config_unlock();
 }
+
+void weight_config_set_tenant(const char *tenant_id, const char *tenant_short)
+{
+    weight_config_lock();
+    if (tenant_id)
+        strlcpy(s_cfg.tenant_id, tenant_id, sizeof(s_cfg.tenant_id));
+    if (tenant_short)
+        strlcpy(s_cfg.tenant_short, tenant_short, sizeof(s_cfg.tenant_short));
+    weight_config_unlock();
+}
+
+void weight_config_set_machine_id(const char *id)
+{
+    weight_config_lock();
+    strlcpy(s_cfg.machine_id, id ? id : "", sizeof(s_cfg.machine_id));
+    weight_config_unlock();
+}
+
+int weight_config_get_lang(void) { return (int)s_cfg.lang; }
+void weight_config_set_lang(int l) { s_cfg.lang = (uint8_t)(l & 0x01); }
 
 esp_err_t weight_config_get_ca_cert(char *out, size_t out_len, size_t *actual_len)
 {
@@ -286,6 +349,7 @@ esp_err_t weight_config_save(void)
     if (err != ESP_OK)
         return err;
 
+    weight_config_lock();
     uint32_t f;
     nvs_set_str(h, "tenant_id", s_cfg.tenant_id);
     nvs_set_str(h, "tenant_srt", s_cfg.tenant_short);
@@ -316,6 +380,7 @@ esp_err_t weight_config_save(void)
     nvs_set_u8(h, "mtls", s_cfg.mqtt_tls ? 1 : 0);
     nvs_set_u8(h, "lang", s_cfg.lang);
 
+    weight_config_unlock();
     err = nvs_commit(h);
     nvs_close(h);
     ESP_LOGI(TAG, "config saved");
@@ -337,21 +402,4 @@ const char *weight_config_unit_str(wcfg_unit_t u)
     default:
         return "g";
     }
-}
-
-void weight_config_set_tenant(const char *tenant_id, const char *tenant_short)
-{
-    if (tenant_id)
-        strlcpy(s_cfg.tenant_id, tenant_id, sizeof(s_cfg.tenant_id));
-    if (tenant_short)
-        strlcpy(s_cfg.tenant_short, tenant_short, sizeof(s_cfg.tenant_short));
-}
-
-int weight_config_get_lang(void) { return (int)s_cfg.lang; }
-
-void weight_config_set_lang(int l) { s_cfg.lang = (uint8_t)(l & 0x01); }
-
-void weight_config_set_machine_id(const char *id)
-{
-    strlcpy(s_cfg.machine_id, id ? id : "", sizeof(s_cfg.machine_id));
 }

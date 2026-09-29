@@ -87,6 +87,14 @@ extern "C"
 
     esp_err_t weight_config_init(void);
 
+    /* Thread safety: setters and weight_config_save() take an internal
+     * recursive mutex. Tasks other than the UI that read STRING fields
+     * (device_id, mqtt_host, ...) should wrap the read in
+     * weight_config_lock()/unlock() or take a full copy. */
+    void weight_config_lock(void);
+    void weight_config_unlock(void);
+    void weight_config_copy(weight_config_t *out);
+
     /* Returns the cached in-memory config. The pointer is stable for app lifetime
      * (singleton). Treat it as read-only; modify via setters + save. */
     const weight_config_t *weight_config_get(void);

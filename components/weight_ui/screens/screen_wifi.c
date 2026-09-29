@@ -710,13 +710,32 @@ lv_obj_t *screen_wifi_create(void)
 
     /* IP settings button - left of rescan (topbar exists here, fine) */
     /* Left top: current network card */
+    /* ---------------------------------------------------------------------
+     * Left column layout (top to bottom):
+     *   0 .. 60                    top bar
+     *   card_y .. +CARD_H          current-network card (status + Static IP + Disconnect)
+     *   list_y .. UI_H             SSID list
+     * The list used to start at y=60 with an opaque background and was
+     * created after the card, so it covered the card and its IP button.
+     * --------------------------------------------------------------------- */
+    const int32_t card_pad = 12;
+    const int32_t card_y = 60 + UI_PAD;
+    const int32_t list_y = card_y + WIFI_CUR_CARD_H + UI_PAD_S;
+    const int32_t card_w = WIFI_LEFT_PANEL_W - 2 * UI_PAD;
+    const int32_t inner_w = card_w - 2 * card_pad;
+    const int32_t cur_btn_w = 140;
+    const int32_t ip_btn_w = 110;
+    const int32_t btn_gap = 8;
+    const int32_t text_w = inner_w - cur_btn_w - ip_btn_w - 2 * btn_gap;
+
+    /* Left top: current network card */
     lv_obj_t *card = lv_obj_create(scr);
-    lv_obj_set_size(card, WIFI_LEFT_PANEL_W - 2 * UI_PAD, WIFI_CUR_CARD_H);
-    lv_obj_align(card, LV_ALIGN_TOP_LEFT, UI_PAD, 60 + UI_PAD);
+    lv_obj_set_size(card, card_w, WIFI_CUR_CARD_H);
+    lv_obj_align(card, LV_ALIGN_TOP_LEFT, UI_PAD, card_y);
     lv_obj_set_style_bg_color(card, UI_COLOR_PANEL, 0);
     lv_obj_set_style_border_width(card, 0, 0);
     lv_obj_set_style_radius(card, UI_RADIUS_S, 0);
-    lv_obj_set_style_pad_all(card, 12, 0);
+    lv_obj_set_style_pad_all(card, card_pad, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *cur_title = lv_label_create(card);
@@ -726,30 +745,34 @@ lv_obj_t *screen_wifi_create(void)
     lv_obj_align(cur_title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     s_cur_ssid_lbl = lv_label_create(card);
-    lv_obj_set_width(s_cur_ssid_lbl, WIFI_LEFT_PANEL_W - 2 * UI_PAD - 24 - 150);
+    lv_obj_set_width(s_cur_ssid_lbl, text_w);
     lv_label_set_long_mode(s_cur_ssid_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_color(s_cur_ssid_lbl, UI_COLOR_TEXT, 0);
     lv_obj_set_style_text_font(s_cur_ssid_lbl, ui_font_normal(), 0);
     lv_obj_align(s_cur_ssid_lbl, LV_ALIGN_TOP_LEFT, 0, 22);
 
-    lv_obj_t *ip_btn2 = lv_btn_create(card);
-    lv_obj_set_size(ip_btn2, 100, 52);
-    lv_obj_align(ip_btn2, LV_ALIGN_RIGHT_MID, -150, 0);
-    lv_obj_set_style_bg_color(ip_btn2, UI_COLOR_PANEL_ALT, 0);
-    lv_obj_set_style_radius(ip_btn2, UI_RADIUS_S, 0);
-    lv_obj_add_event_cb(ip_btn2, on_ip_settings_open, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *ip_lbl2 = lv_label_create(ip_btn2);
-    lv_obj_set_style_text_font(ip_lbl2, ui_font_small(), 0);
-    lv_obj_set_style_text_color(ip_lbl2, UI_COLOR_TEXT, 0);
-    lv_label_set_text(ip_lbl2, "IP");
-    lv_obj_center(ip_lbl2);
-
     s_cur_detail_lbl = lv_label_create(card);
+    lv_obj_set_width(s_cur_detail_lbl, text_w);
+    lv_label_set_long_mode(s_cur_detail_lbl, LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_font(s_cur_detail_lbl, ui_font_small(), 0);
     lv_obj_align(s_cur_detail_lbl, LV_ALIGN_TOP_LEFT, 0, 52);
 
+    /* Static IP / DHCP settings button - opens the IP Settings popup */
+    lv_obj_t *ip_btn = lv_btn_create(card);
+    lv_obj_set_size(ip_btn, ip_btn_w, 52);
+    lv_obj_align(ip_btn, LV_ALIGN_RIGHT_MID, -(cur_btn_w + btn_gap), 0);
+    lv_obj_set_style_bg_color(ip_btn, UI_COLOR_PANEL_ALT, 0);
+    lv_obj_set_style_radius(ip_btn, UI_RADIUS_S, 0);
+    lv_obj_add_event_cb(ip_btn, on_ip_settings_open, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ip_lbl = lv_label_create(ip_btn);
+    lv_obj_set_style_text_font(ip_lbl, ui_font_small(), 0);
+    lv_obj_set_style_text_color(ip_lbl, UI_COLOR_TEXT, 0);
+    lv_label_set_text(ip_lbl, "Static IP"); /* network UI, no TR() - same as popup */
+    lv_obj_center(ip_lbl);
+
+    /* Disconnect / Reconnect */
     s_cur_btn = lv_btn_create(card);
-    lv_obj_set_size(s_cur_btn, 140, 52);
+    lv_obj_set_size(s_cur_btn, cur_btn_w, 52);
     lv_obj_align(s_cur_btn, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_set_style_radius(s_cur_btn, UI_RADIUS_S, 0);
     lv_obj_add_event_cb(s_cur_btn, on_cur_btn, LV_EVENT_CLICKED, NULL);
@@ -758,15 +781,19 @@ lv_obj_t *screen_wifi_create(void)
     lv_obj_set_style_text_color(s_cur_btn_lbl, UI_COLOR_TEXT, 0);
     lv_obj_center(s_cur_btn_lbl);
 
-    /* Left: SSID list */
+    /* Left: SSID list - starts BELOW the card instead of on top of it */
     s_ssid_list = lv_obj_create(scr);
-    lv_obj_set_size(s_ssid_list, WIFI_LEFT_PANEL_W, UI_H - 60);
-    lv_obj_align(s_ssid_list, LV_ALIGN_TOP_LEFT, 0, 60);
+    lv_obj_set_size(s_ssid_list, WIFI_LEFT_PANEL_W, UI_H - list_y);
+    lv_obj_align(s_ssid_list, LV_ALIGN_TOP_LEFT, 0, list_y);
     lv_obj_set_style_bg_color(s_ssid_list, UI_COLOR_BG, 0);
     lv_obj_set_style_border_width(s_ssid_list, 0, 0);
     lv_obj_set_style_pad_all(s_ssid_list, UI_PAD, 0);
+    lv_obj_set_style_pad_top(s_ssid_list, 0, 0); /* card already has a gap above */
     lv_obj_set_style_pad_row(s_ssid_list, UI_PAD_S, 0);
     lv_obj_set_flex_flow(s_ssid_list, LV_FLEX_FLOW_COLUMN);
+
+    /* Belt and braces: keep the card above anything created later */
+    lv_obj_move_foreground(card);
 
     /* Right: password panel */
     lv_obj_t *right = lv_obj_create(scr);

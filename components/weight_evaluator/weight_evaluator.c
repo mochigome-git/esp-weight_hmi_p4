@@ -1,5 +1,21 @@
 /**
  * @file weight_evaluator.c
+ *
+ * Pipeline per sample:
+ *   UART sample -> 250 ms bucket average -> zero check -> "moved" check ->
+ *   sliding window -> stability -> limits -> state/audio/alert/MQTT
+ *
+ * Placement gate ("one publish per placement"):
+ *   - Armed while the pan is empty (<= zero_threshold).
+ *   - The first stable reading in RUN mode publishes, beeps, and (for
+ *     HIGH/LOW) raises the sticky alert ONCE. The gate then locks until the
+ *     pan returns to zero.
+ *   - Readings taken in IDLE never lock the gate, so an item already on the
+ *     pan when READY is pressed is still published once it is stable.
+ *   - If the weight moves (> tolerance) away from the published value while
+ *     the gate is locked, the display follows the live value/status instead
+ *     of keeping the stale published result. Set EVAL_REARM_ON_CHANGE=1 to
+ *     also publish again once the new weight stabilises.
  */
 
 #include <math.h>
@@ -17,26 +33,24 @@
 
 static const char *TAG = "eval";
 
+#ifndef EVAL_REARM_ON_CHANGE
+#define EVAL_REARM_ON_CHANGE 0
+#endif
+
 #define WINDOW_MAX 32
+#define BUCKET_US 250000 /* 4 Hz evaluation rate */
 
 static float win[WINDOW_MAX];
 static uint8_t win_n = 0;
 static uint8_t win_idx = 0;
+static uint8_t win_size_used = 0;
 
 static float s_last_window_mean = 0.0f;
 static bool s_have_last_mean = false;
-static bool published_for_current_placement = false;
-static weight_status_t s_last_published_status = WEIGHT_STATUS_NONE;
 
-static void win_push(float v, uint8_t window_size)
-{
-    if (window_size > WINDOW_MAX)
-        window_size = WINDOW_MAX;
-    win[win_idx] = v;
-    win_idx = (win_idx + 1) % window_size;
-    if (win_n < window_size)
-        win_n++;
-}
+static bool s_gate_locked = false; /* published for the current placement */
+static float s_published_value = 0.0f;
+static weight_status_t s_published_status = WEIGHT_STATUS_NONE;
 
 static void win_reset(void)
 {
@@ -45,16 +59,38 @@ static void win_reset(void)
     s_have_last_mean = false;
 }
 
-static bool window_is_stable(uint8_t window_size, float tolerance)
+static void win_push(float v, uint8_t window_size)
 {
+    if (window_size > WINDOW_MAX)
+        window_size = WINDOW_MAX;
+    if (window_size != win_size_used)
+    {
+        /* Stability window changed in settings - old ring layout is invalid */
+        win_size_used = window_size;
+        win_reset();
+    }
+    win[win_idx] = v;
+    win_idx = (uint8_t)((win_idx + 1) % window_size);
     if (win_n < window_size)
-        return false;
+        win_n++;
+}
 
+static float win_mean(void)
+{
     float sum = 0.0f;
     for (uint8_t i = 0; i < win_n; i++)
         sum += win[i];
-    float mean = sum / win_n;
+    return win_n ? sum / win_n : 0.0f;
+}
 
+static bool window_is_stable(uint8_t window_size, float tolerance)
+{
+    if (window_size > WINDOW_MAX)
+        window_size = WINDOW_MAX;
+    if (win_n < window_size)
+        return false;
+
+    float mean = win_mean();
     for (uint8_t i = 0; i < win_n; i++)
     {
         if (fabsf(win[i] - mean) > tolerance)
@@ -83,103 +119,125 @@ static weight_status_t evaluate_limits(float v, const weight_active_model_t *m)
     return WEIGHT_STATUS_PASS;
 }
 
+static void play_for_status(weight_status_t st)
+{
+    switch (st)
+    {
+    case WEIGHT_STATUS_PASS:
+        weight_audio_play(WEIGHT_AUDIO_PASS);
+        break;
+    case WEIGHT_STATUS_LOW:
+        weight_audio_play(WEIGHT_AUDIO_LOW);
+        break;
+    case WEIGHT_STATUS_HIGH:
+        weight_audio_play(WEIGHT_AUDIO_HIGH);
+        break;
+    default:
+        break;
+    }
+}
+
+/* Evaluate one (bucket-averaged) value */
+static void process_value(float value, time_t ts)
+{
+    const weight_config_t *cfg = weight_config_get();
+    weight_state_snapshot_t snap;
+    weight_state_get_snapshot(&snap);
+
+    /* Zero - full reset, re-arm the placement gate */
+    if (value <= cfg->zero_threshold)
+    {
+        win_reset();
+        s_gate_locked = false;
+        s_published_status = WEIGHT_STATUS_NONE;
+        weight_state_update_reading(value, false, WEIGHT_STATUS_NONE, ts);
+        return;
+    }
+
+    /* Value moved away from the current window -> start a new window */
+    if (win_n > 0 && fabsf(value - win_mean()) > cfg->stability_tolerance)
+        win_reset();
+
+    win_push(value, cfg->stability_window);
+    bool stable = window_is_stable(cfg->stability_window, cfg->stability_tolerance);
+
+    weight_status_t status = WEIGHT_STATUS_NONE;
+    if (snap.model.valid)
+        status = evaluate_limits(value, &snap.model);
+
+    bool moved_since_publish = s_gate_locked &&
+                               fabsf(value - s_published_value) > cfg->stability_tolerance;
+
+#if EVAL_REARM_ON_CHANGE
+    if (moved_since_publish && stable)
+    {
+        /* Weight changed and settled again: treat as a new placement */
+        s_gate_locked = false;
+        moved_since_publish = false;
+    }
+#endif
+
+    /* Display: keep the published verdict while the item is untouched,
+     * follow the live value once it has moved. */
+    weight_status_t display_status =
+        (s_gate_locked && !moved_since_publish) ? s_published_status : status;
+    weight_state_update_reading(value, stable, display_status, ts);
+
+    bool in_run = (snap.mode == WEIGHT_MODE_RUN) && snap.model.valid;
+    if (!stable || s_gate_locked || !in_run)
+        return; /* gate only locks on a real RUN-mode publish */
+
+    ESP_LOGI(TAG, "stable: %.3f %s  status=%d",
+             value, weight_config_unit_str(cfg->unit), status);
+
+    play_for_status(status);
+    if (status == WEIGHT_STATUS_HIGH || status == WEIGHT_STATUS_LOW)
+        weight_state_raise_alert(status, value, ts);
+
+    /* Non-blocking: queued to the MQTT outbox, or to the offline buffer */
+    weight_mqtt_publish_reading(value, status, ts);
+
+    s_published_value = value;
+    s_published_status = status;
+    s_gate_locked = true;
+}
+
 static void eval_task(void *arg)
 {
-    ESP_LOGI(TAG, "evaluator started");
+    ESP_LOGI(TAG, "evaluator started (bucket %d ms, rearm_on_change=%d)",
+             BUCKET_US / 1000, EVAL_REARM_ON_CHANGE);
 
-    /* Rate limiter: process at most 4 samples/sec (one per 250 ms) */
-    static int64_t last_accepted_us = 0;
-    const int64_t INTERVAL_US = 250000; /* 250 ms = 4 Hz */
+    /* Average every sample that arrives inside a 250 ms bucket instead of
+     * dropping them: same 4 Hz evaluation rate, but less noise and no
+     * wasted scale output. */
+    double b_sum = 0.0;
+    uint32_t b_cnt = 0;
+    time_t b_ts = 0;
+    int64_t b_start_us = 0;
 
     while (1)
     {
         weight_uart_sample_t s;
-        if (!weight_uart_take(&s, portMAX_DELAY))
-            continue;
-
-        /* --- rate gate --- */
+        bool got = weight_uart_take(&s, pdMS_TO_TICKS(300));
         int64_t now_us = esp_timer_get_time();
-        if (now_us - last_accepted_us < INTERVAL_US)
-            continue; /* too soon — drop this sample */
-        last_accepted_us = now_us;
-        /* --- end rate gate --- */
 
-        const weight_config_t *cfg = weight_config_get();
-        weight_state_snapshot_t snap;
-        weight_state_get_snapshot(&snap);
-
-        /* Zero — full reset */
-        if (s.value <= cfg->zero_threshold)
+        if (got)
         {
-            win_reset();
-            published_for_current_placement = false;
-            s_last_published_status = WEIGHT_STATUS_NONE;
-            weight_state_update_reading(s.value, false, WEIGHT_STATUS_NONE, s.ts);
-            continue;
+            if (b_cnt == 0)
+                b_start_us = now_us;
+            b_sum += s.value;
+            b_cnt++;
+            b_ts = s.ts;
         }
 
-        /* Value is above zero — check if it moved away from current window */
-        if (win_n > 0)
+        /* Close the bucket when it is old enough, or when the scale went
+         * quiet (take() timed out) and we still hold data. */
+        if (b_cnt > 0 && (now_us - b_start_us >= BUCKET_US || !got))
         {
-            float sum = 0.0f;
-            for (uint8_t i = 0; i < win_n; i++)
-                sum += win[i];
-            float cur_mean = sum / win_n;
-
-            if (fabsf(s.value - cur_mean) > cfg->stability_tolerance)
-            {
-                /* Value is changing — reset window but DO NOT rearm gate.
-                 * If we already published, keep the gate locked until zero. */
-                win_n = 0;
-                win_idx = 0;
-                win_reset();
-            }
-        }
-
-        win_push(s.value, cfg->stability_window);
-        bool stable = window_is_stable(cfg->stability_window, cfg->stability_tolerance);
-
-        weight_status_t status = WEIGHT_STATUS_NONE;
-        if (snap.model.valid)
-            status = evaluate_limits(s.value, &snap.model);
-
-        /* Display status — retain last published status until zero */
-        weight_status_t display_status = published_for_current_placement
-                                             ? s_last_published_status
-                                             : status;
-
-        weight_state_update_reading(s.value, stable, display_status, s.ts);
-
-        bool fresh_stable_event = stable && !published_for_current_placement;
-
-        if (fresh_stable_event)
-        {
-            ESP_LOGI(TAG, "stable: %.3f %s  status=%d",
-                     s.value, weight_config_unit_str(cfg->unit), status);
-
-            if (snap.mode == WEIGHT_MODE_RUN && status != WEIGHT_STATUS_NONE)
-            {
-                switch (status)
-                {
-                case WEIGHT_STATUS_PASS:
-                    weight_audio_play(WEIGHT_AUDIO_PASS);
-                    break;
-                case WEIGHT_STATUS_LOW:
-                    weight_audio_play(WEIGHT_AUDIO_LOW);
-                    break;
-                case WEIGHT_STATUS_HIGH:
-                    weight_audio_play(WEIGHT_AUDIO_HIGH);
-                    break;
-                default:
-                    break;
-                }
-            }
-
-            if (snap.mode == WEIGHT_MODE_RUN && snap.model.valid)
-                weight_mqtt_publish_reading(s.value, status, s.ts);
-
-            s_last_published_status = status; /* remember what we showed */
-            published_for_current_placement = true;
+            float mean = (float)(b_sum / b_cnt);
+            b_sum = 0.0;
+            b_cnt = 0;
+            process_value(mean, b_ts);
         }
     }
 }
