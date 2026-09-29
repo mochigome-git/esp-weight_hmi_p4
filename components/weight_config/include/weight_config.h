@@ -26,6 +26,7 @@ extern "C"
 #define WCFG_MAX_IP_STR_LEN 16 /* fits "255.255.255.255" + NUL */
 #define WCFG_MAX_DEVICE_NAME_LEN 32
 #define WCFG_MAX_DEVICE_ID_LEN 40
+#define WCFG_MAX_MACHINE_ID_LEN 40
 
     typedef enum
     {
@@ -40,7 +41,9 @@ extern "C"
 
         /* Device */
         char device_id[WCFG_MAX_DEVICE_ID_LEN];     /* was char device_id[32] */
-        char device_name[WCFG_MAX_DEVICE_NAME_LEN]; /* short, human-readable label for display only */
+        char device_name[WCFG_MAX_DEVICE_NAME_LEN]; /* short, human-readable
+        label for display only */
+        char machine_id[WCFG_MAX_MACHINE_ID_LEN];
         char tenant_id[64];
         char tenant_short[16];
 
@@ -93,6 +96,7 @@ extern "C"
     void weight_config_set_lang(int lang);
     void weight_config_set_device_id(const char *id);
     void weight_config_set_device_name(const char *name);
+    void weight_config_set_machine_id(const char *id);
     void weight_config_set_tenant(const char *tenant_id, const char *tenant_short);
     void weight_config_set_decimal(uint8_t d);
     void weight_config_set_unit(wcfg_unit_t u);

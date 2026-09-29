@@ -20,6 +20,7 @@
 #include "cJSON.h"
 #include "esp_timer.h"
 #include "freertos/semphr.h"
+#include "esp_random.h"
 
 #define FW_VERSION "1.0.0"
 
@@ -40,6 +41,7 @@ static char s_topic_sync_req[96];
 static char s_topic_sync_sub[96];
 static char s_topic_payload[96];
 static char s_topic_model_push[96];
+static char s_topic_lot_new[96];
 
 /* Heap-allocated CA cert (PEM), loaded from NVS at init */
 static char *s_ca_pem = NULL;
@@ -82,6 +84,8 @@ static void build_topics(const weight_state_snapshot_t *s)
     snprintf(s_topic_sync_sub, sizeof(s_topic_sync_sub), "%s/models/sync/#", s->tenant_short);
     snprintf(s_topic_payload, sizeof(s_topic_payload), "%s/devices/payload", s->tenant_short);
     snprintf(s_topic_model_push, sizeof(s_topic_model_push), "%s/models/push", s->tenant_short); // no device_id
+    snprintf(s_topic_lot_new, sizeof(s_topic_lot_new), "%s/%s/lot/new",
+             s->tenant_short, s->device_id);
 }
 
 /* Uptime in seconds since boot */
@@ -421,6 +425,8 @@ static esp_err_t weight_mqtt_restart_locked(void)
     snprintf(s_topic_sync_req, sizeof(s_topic_sync_req), "%s/%s/sync/req", snap.tenant_short, dev_id);
     snprintf(s_topic_sync_sub, sizeof(s_topic_sync_sub), "%s/models/sync/#", snap.tenant_short);
     snprintf(s_topic_payload, sizeof(s_topic_payload), "%s/devices/payload", snap.tenant_short);
+    snprintf(s_topic_lot_new, sizeof(s_topic_lot_new), "%s/%s/lot/new",
+             snap.tenant_short, dev_id);
 
     ESP_LOGI(TAG, "topics rebuilt:");
     ESP_LOGI(TAG, "  reading : %s", s_topic_reading);
@@ -567,4 +573,54 @@ bool weight_mqtt_is_connected(void)
     weight_state_snapshot_t snap;
     weight_state_get_snapshot(&snap);
     return snap.mqtt_connected;
+}
+
+static void make_uuid(char *out, size_t len)
+{
+    uint8_t r[16];
+    esp_fill_random(r, sizeof(r));
+    r[6] = (r[6] & 0x0f) | 0x40;
+    r[8] = (r[8] & 0x3f) | 0x80;
+    snprintf(out, len,
+             "%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+             r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7],
+             r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
+}
+
+esp_err_t weight_mqtt_publish_new_lot(void)
+{
+    const weight_config_t *cfg = weight_config_get();
+    if (cfg->machine_id[0] == '\0')
+        return ESP_ERR_NOT_FOUND;
+    if (!s_client || !s_connected)
+        return ESP_ERR_INVALID_STATE;
+
+    weight_state_snapshot_t snap;
+    weight_state_get_snapshot(&snap);
+    const char *device_id = cfg->device_id[0] ? cfg->device_id : snap.device_id;
+
+    char req_id[37];
+    make_uuid(req_id, sizeof(req_id));
+    char ts_str[32];
+    iso8601(time(NULL), ts_str, sizeof(ts_str));
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "request_id", req_id); /* for dedupe on QoS1 redelivery */
+    cJSON_AddStringToObject(root, "machine_id", cfg->machine_id);
+    cJSON_AddStringToObject(root, "device_id", device_id);
+    cJSON_AddStringToObject(root, "tenant_id", snap.tenant_id);
+    cJSON_AddStringToObject(root, "requested_at", ts_str);
+
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!payload)
+        return ESP_ERR_NO_MEM;
+
+    ESP_LOGI(TAG, "new lot -> '%s': %s", s_topic_lot_new, payload);
+
+    /* enqueue = non-blocking; this is called from the LVGL task */
+    int msg_id = esp_mqtt_client_enqueue(s_client, s_topic_lot_new,
+                                         payload, 0, 1, 0, true);
+    free(payload);
+    return msg_id >= 0 ? ESP_OK : ESP_FAIL;
 }

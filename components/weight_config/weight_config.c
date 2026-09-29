@@ -21,6 +21,9 @@ static void apply_defaults(weight_config_t *c)
 #ifdef DEFAULT_DEVICE_ID
     strlcpy(c->device_id, DEFAULT_DEVICE_ID, sizeof(c->device_id));
 #endif
+#ifdef DEFAULT_MACHINE_ID
+    strlcpy(c->machine_id, DEFAULT_MACHINE_ID, sizeof(c->machine_id));
+#endif
 
     c->decimal_places = 1;
     c->unit = WCFG_UNIT_G;
@@ -76,6 +79,70 @@ static void apply_defaults(weight_config_t *c)
             (dst) = v != 0;                        \
     } while (0)
 
+/* Build-provisioned IDs (DEVICE_ID / MACHINE_ID files at project root).
+ * NVS remembers the last build value applied ("*_fw" marker keys):
+ *  - build value changed since last flash -> overwrite the saved ID once
+ *  - build value unchanged                -> keep NVS (HMI edits win)
+ *  - saved ID empty                       -> fill from build value      */
+static bool provision_id(nvs_handle_t h, const char *val_key, const char *marker_key,
+                         const char *build_val, char *dst, size_t dst_len)
+{
+    char last[64] = "";
+    size_t len = sizeof(last);
+    if (nvs_get_str(h, marker_key, last, &len) != ESP_OK)
+        last[0] = '\0';
+
+    if (strcmp(last, build_val) == 0)
+    {
+        if (dst[0] != '\0')
+            return false; /* same build as before - keep saved/HMI value */
+        ESP_LOGW(TAG, "%s empty - filling from build: %s", val_key, build_val);
+    }
+    else
+    {
+        ESP_LOGW(TAG, "%s: new build value %s (saved was '%s') - overwriting",
+                 val_key, build_val, dst[0] ? dst : "");
+        nvs_set_str(h, marker_key, build_val);
+    }
+
+    strlcpy(dst, build_val, dst_len);
+    nvs_set_str(h, val_key, dst);
+    return true;
+}
+
+static void apply_build_ids(void)
+{
+#if defined(DEFAULT_DEVICE_ID) || defined(DEFAULT_MACHINE_ID)
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK)
+    {
+        /* NVS unusable - at least don't run with empty IDs */
+#ifdef DEFAULT_DEVICE_ID
+        if (!s_cfg.device_id[0])
+            strlcpy(s_cfg.device_id, DEFAULT_DEVICE_ID, sizeof(s_cfg.device_id));
+#endif
+#ifdef DEFAULT_MACHINE_ID
+        if (!s_cfg.machine_id[0])
+            strlcpy(s_cfg.machine_id, DEFAULT_MACHINE_ID, sizeof(s_cfg.machine_id));
+#endif
+        return;
+    }
+
+    bool dirty = false;
+#ifdef DEFAULT_DEVICE_ID
+    dirty |= provision_id(h, "devid", "devid_fw", DEFAULT_DEVICE_ID,
+                          s_cfg.device_id, sizeof(s_cfg.device_id));
+#endif
+#ifdef DEFAULT_MACHINE_ID
+    dirty |= provision_id(h, "machid", "machid_fw", DEFAULT_MACHINE_ID,
+                          s_cfg.machine_id, sizeof(s_cfg.machine_id));
+#endif
+    if (dirty)
+        nvs_commit(h);
+    nvs_close(h);
+#endif
+}
+
 esp_err_t weight_config_init(void)
 {
     apply_defaults(&s_cfg);
@@ -85,12 +152,12 @@ esp_err_t weight_config_init(void)
     if (err == ESP_ERR_NVS_NOT_FOUND)
     {
         ESP_LOGI(TAG, "no saved config, using defaults");
-        return ESP_OK;
+        goto done;
     }
     if (err != ESP_OK)
     {
         ESP_LOGW(TAG, "nvs_open failed: %s", esp_err_to_name(err));
-        return ESP_OK; /* still proceed with defaults */
+        goto done; /* still proceed with defaults */
     }
 
     LOAD_STR(h, "tenant_id", s_cfg.tenant_id);
@@ -111,6 +178,7 @@ esp_err_t weight_config_init(void)
     LOAD_STR(h, "wmask", s_cfg.wifi_netmask);
     LOAD_STR(h, "wdns", s_cfg.wifi_dns);
     LOAD_STR(h, "devid", s_cfg.device_id);
+    LOAD_STR(h, "machid", s_cfg.machine_id);
     LOAD_STR(h, "devname", s_cfg.device_name);
     LOAD_STR(h, "mhost", s_cfg.mqtt_host);
     LOAD_U16(h, "mport", s_cfg.mqtt_port);
@@ -118,8 +186,14 @@ esp_err_t weight_config_init(void)
     LOAD_STR(h, "mpass", s_cfg.mqtt_pass);
     LOAD_BOOL(h, "mtls", s_cfg.mqtt_tls);
     LOAD_U8(h, "lang", s_cfg.lang);
-
     nvs_close(h);
+
+done:
+    apply_build_ids();
+
+    ESP_LOGI(TAG, "device_id=%s machine_id=%s",
+             s_cfg.device_id[0] ? s_cfg.device_id : "(unset)",
+             s_cfg.machine_id[0] ? s_cfg.machine_id : "(unset)");
     ESP_LOGI(TAG, "config loaded (dec=%d unit=%s baud=%lu vol=%d mqtt=%s:%d tls=%d)",
              s_cfg.decimal_places, weight_config_unit_str(s_cfg.unit),
              (unsigned long)s_cfg.uart_baud, s_cfg.audio_volume,
@@ -233,6 +307,7 @@ esp_err_t weight_config_save(void)
     nvs_set_str(h, "wmask", s_cfg.wifi_netmask);
     nvs_set_str(h, "wdns", s_cfg.wifi_dns);
     nvs_set_str(h, "devid", s_cfg.device_id);
+    nvs_set_str(h, "machid", s_cfg.machine_id);
     nvs_set_str(h, "devname", s_cfg.device_name);
     nvs_set_str(h, "mhost", s_cfg.mqtt_host);
     nvs_set_u16(h, "mport", s_cfg.mqtt_port);
@@ -275,3 +350,8 @@ void weight_config_set_tenant(const char *tenant_id, const char *tenant_short)
 int weight_config_get_lang(void) { return (int)s_cfg.lang; }
 
 void weight_config_set_lang(int l) { s_cfg.lang = (uint8_t)(l & 0x01); }
+
+void weight_config_set_machine_id(const char *id)
+{
+    strlcpy(s_cfg.machine_id, id ? id : "", sizeof(s_cfg.machine_id));
+}

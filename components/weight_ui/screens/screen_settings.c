@@ -16,6 +16,9 @@
 #include "weight_audio.h"
 #include "weight_mqtt.h"
 #include "weight_i18n.h"
+#include <ctype.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 static const char *TAG = "screen_settings";
 
@@ -66,6 +69,8 @@ static lv_obj_t *s_dev_popup = NULL;
 static lv_obj_t *s_dev_name_ta = NULL;
 static lv_obj_t *s_dev_id_ta = NULL;
 static lv_obj_t *s_dev_kbd = NULL;
+static lv_obj_t *s_dev_machine_ta = NULL;
+static lv_obj_t *s_dev_err_lbl = NULL;
 
 static lv_obj_t *s_dd_popup = NULL;
 static dd_context_t s_dd_ctx = DD_NONE;
@@ -133,12 +138,11 @@ static void refresh_values(void)
     lv_label_set_text(s_lbls.audio, buf);
 
     /* Device */
-    if (cfg->device_name[0] || cfg->device_id[0])
-        snprintf(buf, sizeof(buf), "%s | %s",
-                 cfg->device_name[0] ? cfg->device_name : "-",
-                 cfg->device_id[0] ? cfg->device_id : "-");
-    else
-        snprintf(buf, sizeof(buf), "%s", TR(status_not_set));
+    /* Device: name | D:xxxxxxxx | M:xxxxxxxx (first 8 chars of each UUID) */
+    snprintf(buf, sizeof(buf), "%s | D:%.8s | M:%.8s",
+             cfg->device_name[0] ? cfg->device_name : "-",
+             cfg->device_id[0] ? cfg->device_id : "--------",
+             cfg->machine_id[0] ? cfg->machine_id : "--------");
     lv_label_set_text(s_lbls.device, buf);
 
     /* About — numbers only, no translation needed */
@@ -727,12 +731,51 @@ static void close_device_popup(void)
 {
     if (s_dev_popup)
     {
-        lv_obj_del(s_dev_popup);
+        /* async: this is called from events of the popup's own children */
+        lv_obj_delete_async(s_dev_popup);
         s_dev_popup = NULL;
         s_dev_name_ta = NULL;
         s_dev_id_ta = NULL;
+        s_dev_machine_ta = NULL;
+        s_dev_err_lbl = NULL;
         s_dev_kbd = NULL;
     }
+}
+
+static bool is_uuid(const char *s)
+{
+    if (!s || strlen(s) != 36)
+        return false;
+    for (int i = 0; i < 36; i++)
+    {
+        if (i == 8 || i == 13 || i == 18 || i == 23)
+        {
+            if (s[i] != '-')
+                return false;
+        }
+        else if (!isxdigit((unsigned char)s[i]))
+            return false;
+    }
+    return true;
+}
+
+static void lower_copy(char *dst, const char *src, size_t n)
+{
+    strlcpy(dst, src ? src : "", n);
+    for (char *p = dst; *p; p++)
+        *p = (char)tolower((unsigned char)*p);
+}
+
+static void mark_field(lv_obj_t *ta, bool ok)
+{
+    lv_obj_set_style_border_color(ta, ok ? UI_COLOR_ACCENT : lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_border_width(ta, ok ? 2 : 3, 0);
+}
+
+static void dev_mqtt_restart_task(void *arg)
+{
+    weight_mqtt_restart(); /* new client ID + topics */
+    vTaskDelete(NULL);
 }
 
 static void on_field_focused_device(lv_event_t *e)
@@ -744,19 +787,33 @@ static void on_field_focused_device(lv_event_t *e)
 
 static void on_device_save(lv_event_t *e)
 {
-    if (!s_dev_name_ta || !s_dev_id_ta)
+    if (!s_dev_name_ta || !s_dev_id_ta || !s_dev_machine_ta)
         return;
-    const char *name = lv_textarea_get_text(s_dev_name_ta);
-    const char *id = lv_textarea_get_text(s_dev_id_ta);
 
-    /* device_name can be cleared to empty (it's optional, purely cosmetic).
-     * device_id must never be saved empty - it's used as the MQTT client ID
-     * and in every topic path, so an empty value breaks connectivity
-     * silently and is very easy to accidentally save via this same popup. */
-    weight_config_set_device_name(name ? name : "");
-    if (id && id[0])
-        weight_config_set_device_id(id);
+    char id[WCFG_MAX_DEVICE_ID_LEN];
+    char mid[WCFG_MAX_MACHINE_ID_LEN];
+    lower_copy(id, lv_textarea_get_text(s_dev_id_ta), sizeof(id));
+    lower_copy(mid, lv_textarea_get_text(s_dev_machine_ta), sizeof(mid));
+
+    bool id_ok = is_uuid(id);                       /* required */
+    bool mid_ok = (mid[0] == '\0') || is_uuid(mid); /* optional: empty = NEW LOT disabled */
+    mark_field(s_dev_id_ta, id_ok);
+    mark_field(s_dev_machine_ta, mid_ok);
+    if (!id_ok || !mid_ok)
+    {
+        lv_label_set_text(s_dev_err_lbl, "IDs must be UUIDs:\nxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx");
+        return;
+    }
+
+    bool id_changed = strcmp(weight_config_get()->device_id, id) != 0;
+
+    weight_config_set_device_name(lv_textarea_get_text(s_dev_name_ta));
+    weight_config_set_device_id(id);
+    weight_config_set_machine_id(mid);
     weight_config_save();
+
+    if (id_changed)
+        xTaskCreate(dev_mqtt_restart_task, "mqtt_rst", 4096, NULL, 5, NULL);
 
     close_device_popup();
     refresh_values();
@@ -764,16 +821,39 @@ static void on_device_save(lv_event_t *e)
 
 static void on_device_cancel(lv_event_t *e) { close_device_popup(); }
 
+static lv_obj_t *make_dev_field(lv_obj_t *modal, const char *label, int32_t y,
+                                const char *placeholder, const char *value,
+                                uint32_t max_len, const lv_font_t *font)
+{
+    lv_obj_t *lbl = lv_label_create(modal);
+    lv_obj_set_style_text_color(lbl, UI_COLOR_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(lbl, ui_font_small(), 0);
+    lv_label_set_text(lbl, label);
+    lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, y);
+
+    lv_obj_t *ta = lv_textarea_create(modal);
+    lv_obj_set_size(ta, 660, 48);
+    lv_obj_align(ta, LV_ALIGN_TOP_LEFT, 0, y + 20);
+    lv_textarea_set_one_line(ta, true);
+    lv_textarea_set_max_length(ta, max_len);
+    lv_textarea_set_placeholder_text(ta, placeholder);
+    lv_textarea_set_text(ta, value);
+    lv_obj_set_style_text_font(ta, font, 0);
+    lv_obj_set_style_bg_color(ta, UI_COLOR_PANEL_ALT, 0);
+    lv_obj_set_style_border_color(ta, UI_COLOR_ACCENT, 0);
+    lv_obj_add_event_cb(ta, on_field_focused_device, LV_EVENT_CLICKED, NULL);
+    return ta;
+}
+
 static void on_device_card(lv_event_t *e)
 {
     close_dd_popup();
     if (s_dev_popup)
         return;
 
-    lv_obj_t *scr = lv_screen_active();
     const weight_config_t *cfg = weight_config_get();
 
-    s_dev_popup = lv_obj_create(scr);
+    s_dev_popup = lv_obj_create(lv_screen_active());
     lv_obj_set_size(s_dev_popup, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(s_dev_popup, 0, 0);
     lv_obj_set_style_bg_opa(s_dev_popup, LV_OPA_60, 0);
@@ -784,9 +864,9 @@ static void on_device_card(lv_event_t *e)
     lv_obj_clear_flag(s_dev_popup, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_move_foreground(s_dev_popup);
 
-    /* Wider modal - a 36-char UUID needs more room than 660px at 18px font */
+    /* 3 fields: modal 40..430, keyboard 470..800 - no overlap */
     lv_obj_t *modal = lv_obj_create(s_dev_popup);
-    lv_obj_set_size(modal, 700, 300);
+    lv_obj_set_size(modal, 700, 390);
     lv_obj_align(modal, LV_ALIGN_TOP_MID, 0, 40);
     lv_obj_set_style_bg_color(modal, UI_COLOR_PANEL, 0);
     lv_obj_set_style_border_width(modal, 0, 0);
@@ -800,44 +880,24 @@ static void on_device_card(lv_event_t *e)
     lv_label_set_text(title, TR(settings_device));
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    /* Device name — top row */
-    lv_obj_t *name_lbl = lv_label_create(modal);
-    lv_obj_set_style_text_color(name_lbl, UI_COLOR_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(name_lbl, ui_font_small(), 0);
-    lv_label_set_text(name_lbl, "Device name");
-    lv_obj_align(name_lbl, LV_ALIGN_TOP_LEFT, 0, 34);
+    s_dev_name_ta = make_dev_field(modal, "Device name", 34, "e.g. hmi-w-p4-3",
+                                   cfg->device_name, WCFG_MAX_DEVICE_NAME_LEN - 1,
+                                   &lv_font_montserrat_18);
+    s_dev_id_ta = make_dev_field(modal, "Device ID", 112, "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+                                 cfg->device_id, WCFG_MAX_DEVICE_ID_LEN - 1,
+                                 &lv_font_montserrat_14);
+    s_dev_machine_ta = make_dev_field(modal, "Machine ID (for NEW LOT)", 190,
+                                      "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+                                      cfg->machine_id, WCFG_MAX_MACHINE_ID_LEN - 1,
+                                      &lv_font_montserrat_14);
 
-    s_dev_name_ta = lv_textarea_create(modal);
-    lv_obj_set_size(s_dev_name_ta, 660, 48);
-    lv_obj_align(s_dev_name_ta, LV_ALIGN_TOP_LEFT, 0, 54);
-    lv_textarea_set_one_line(s_dev_name_ta, true);
-    lv_textarea_set_max_length(s_dev_name_ta, WCFG_MAX_DEVICE_NAME_LEN - 1);
-    lv_textarea_set_placeholder_text(s_dev_name_ta, "e.g. hmi-w-p4-3");
-    lv_textarea_set_text(s_dev_name_ta, cfg->device_name);
-    lv_obj_set_style_text_font(s_dev_name_ta, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_bg_color(s_dev_name_ta, UI_COLOR_PANEL_ALT, 0);
-    lv_obj_set_style_border_color(s_dev_name_ta, UI_COLOR_ACCENT, 0);
-    lv_obj_add_event_cb(s_dev_name_ta, on_field_focused_device, LV_EVENT_CLICKED, NULL);
-
-    /* Device ID — second row, below name. Smaller font + wider field
-     * so a full 36-char UUID is readable without scrolling. */
-    lv_obj_t *id_lbl = lv_label_create(modal);
-    lv_obj_set_style_text_color(id_lbl, UI_COLOR_TEXT_MUTED, 0);
-    lv_obj_set_style_text_font(id_lbl, ui_font_small(), 0);
-    lv_label_set_text(id_lbl, "Device ID");
-    lv_obj_align(id_lbl, LV_ALIGN_TOP_LEFT, 0, 130);
-
-    s_dev_id_ta = lv_textarea_create(modal);
-    lv_obj_set_size(s_dev_id_ta, 660, 48);
-    lv_obj_align(s_dev_id_ta, LV_ALIGN_TOP_LEFT, 0, 150);
-    lv_textarea_set_one_line(s_dev_id_ta, true);
-    lv_textarea_set_max_length(s_dev_id_ta, WCFG_MAX_DEVICE_ID_LEN - 1);
-    lv_textarea_set_placeholder_text(s_dev_id_ta, "device-id");
-    lv_textarea_set_text(s_dev_id_ta, cfg->device_id);
-    lv_obj_set_style_text_font(s_dev_id_ta, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_bg_color(s_dev_id_ta, UI_COLOR_PANEL_ALT, 0);
-    lv_obj_set_style_border_color(s_dev_id_ta, UI_COLOR_ACCENT, 0);
-    lv_obj_add_event_cb(s_dev_id_ta, on_field_focused_device, LV_EVENT_CLICKED, NULL);
+    s_dev_err_lbl = lv_label_create(modal);
+    lv_obj_set_width(s_dev_err_lbl, 340);
+    lv_obj_set_style_text_align(s_dev_err_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(s_dev_err_lbl, lv_palette_lighten(LV_PALETTE_RED, 1), 0);
+    lv_obj_set_style_text_font(s_dev_err_lbl, &lv_font_montserrat_14, 0);
+    lv_label_set_text(s_dev_err_lbl, "");
+    lv_obj_align(s_dev_err_lbl, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     lv_obj_t *cancel_btn = lv_btn_create(modal);
     lv_obj_set_size(cancel_btn, 140, 44);
@@ -873,6 +933,7 @@ static void on_device_card(lv_event_t *e)
     lv_obj_add_event_cb(s_dev_kbd, on_device_save, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(s_dev_kbd, on_device_cancel, LV_EVENT_CANCEL, NULL);
 }
+
 /* ============================================================================
  * Card helper — title uses TR() + ui_font_small()
  * ========================================================================== */

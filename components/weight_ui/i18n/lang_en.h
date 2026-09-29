@@ -26,6 +26,12 @@ static const weight_lang_t LANG_EN = {
     .main_field_lower = "lower",
     .main_alert_high = "Reading exceeds upper limit",
     .main_alert_low = "Reading below lower limit",
+    .main_btn_new_lot = "NEW LOT",
+    .main_lot_confirm = "Start a new lot?",
+    .main_lot_confirm_btn = "Start",
+    .main_lot_sent = "New lot requested",
+    .main_lot_offline = "Failed - MQTT not connected",
+    .main_lot_no_machine = "Machine ID not set (Settings > Device)",
 
     // screen_models
     .models_title_fmt = "Models (%u)",
@@ -102,6 +108,17 @@ static const weight_lang_t LANG_EN = {
     .wifi_password_for = "Password for",
     .wifi_connect = "Connect",
     .wifi_no_password = "(no password)",
+    .wifi_current = "Current network",
+    .wifi_not_connected = "Not connected",
+    .wifi_connecting = "Connecting...",
+    .wifi_disconnect = "Disconnect",
+    .wifi_reconnect = "Reconnect",
+    .wifi_disconnect_confirm = "Disconnect WiFi? Readings will not be sent until you reconnect.",
+    .wifi_disconnected_manual = "Disconnected (auto-reconnect off)",
+    .wifi_join_failed = "Could not join",
+    .wifi_wrong_password = "wrong password",
+    .wifi_ap_not_found = "network not found",
+    .wifi_join_error = "connection failed",
 
     // screen_mqtt
     .mqtt_title = "MQTT Broker",

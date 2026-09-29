@@ -43,6 +43,7 @@ static const char *TAG = "scr_wifi";
 
 #define WIFI_MAX_AP 12
 #define WIFI_LEFT_PANEL_W 480
+#define WIFI_CUR_CARD_H 100
 
 static volatile bool s_scan_in_progress = false;
 
@@ -58,6 +59,10 @@ static lv_obj_t *s_mask_ta = NULL;
 static lv_obj_t *s_dns_ta = NULL;
 static lv_obj_t *s_ip_kbd = NULL;
 static bool s_ip_mode_static = false;
+static lv_obj_t *s_cur_ssid_lbl;
+static lv_obj_t *s_cur_detail_lbl;
+static lv_obj_t *s_cur_btn;
+static lv_obj_t *s_cur_btn_lbl;
 
 static lv_obj_t *s_ssid_list;
 static lv_obj_t *s_pwd_ta;
@@ -69,44 +74,34 @@ static char s_selected_ssid[33];
 
 /* forward decls - defined further down, used in on_screen_load() */
 static void refresh_net_status(void);
+static void refresh_conn_status(void);
 static void on_ip_settings_open(lv_event_t *e);
 
 /* ---------------------------------------------------------------------------
  * Event handlers
  * --------------------------------------------------------------------------- */
-static void reconnect_task(void *arg)
+
+static void reset_password_panel(void)
 {
-    char *ssid = (char *)arg; /* heap-allocated, freed below */
-    const weight_config_t *cfg = weight_config_get();
-    ESP_LOGI(TAG, "reconnecting to '%s' after leaving wifi screen", ssid);
-    weight_wifi_connect(ssid, cfg->wifi_pass);
-    free(ssid);
-    vTaskDelete(NULL);
+    s_selected_ssid[0] = '\0';
+    lv_textarea_set_text(s_pwd_ta, "");
+    lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text(s_pwd_label, TR(wifi_select_network));
+    lv_obj_set_style_text_color(s_pwd_label, UI_COLOR_TEXT, 0);
 }
 
 static void on_back(lv_event_t *e)
 {
-    const weight_config_t *cfg = weight_config_get();
-    if (cfg->wifi_ssid[0] && !weight_wifi_is_connected())
-    {
-        char *ssid_copy = strdup(cfg->wifi_ssid);
-        if (ssid_copy)
-            xTaskCreate(reconnect_task, "wifi_reconn", 4096, ssid_copy, 5, NULL);
-    }
-    weight_ui_show(UI_SCREEN_SETTINGS);
+    weight_ui_show(UI_SCREEN_SETTINGS); /* scan no longer drops the link - nothing to restore */
 }
 
 static void on_connect(lv_event_t *e)
 {
     if (s_selected_ssid[0] == '\0')
-    {
-        ESP_LOGW(TAG, "no SSID selected");
         return;
-    }
-    const char *pwd = lv_textarea_get_text(s_pwd_ta);
-    ESP_LOGI(TAG, "connecting to '%s'...", s_selected_ssid);
-    weight_wifi_connect(s_selected_ssid, pwd);
-    weight_ui_show(UI_SCREEN_SETTINGS);
+    weight_wifi_connect(s_selected_ssid, lv_textarea_get_text(s_pwd_ta));
+    reset_password_panel();
+    refresh_conn_status();
 }
 
 static void on_keyboard_event(lv_event_t *e)
@@ -115,9 +110,8 @@ static void on_keyboard_event(lv_event_t *e)
     if (code == LV_EVENT_READY)
         on_connect(e);
     else if (code == LV_EVENT_CANCEL)
-        on_back(e);
+        reset_password_panel();
 }
-
 static void on_ssid_picked(lv_event_t *e)
 {
     lv_obj_t *btn = lv_event_get_target(e);
@@ -134,6 +128,39 @@ static void on_ssid_picked(lv_event_t *e)
     lv_textarea_set_text(s_pwd_ta, "");
     lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_keyboard_set_textarea(s_keyboard, s_pwd_ta);
+    lv_obj_set_style_text_color(s_pwd_label, UI_COLOR_TEXT, 0);
+}
+
+static void on_disc_cancel(lv_event_t *e)
+{
+    lv_msgbox_close_async((lv_obj_t *)lv_event_get_user_data(e));
+}
+
+static void on_disc_confirm(lv_event_t *e)
+{
+    weight_wifi_disconnect();
+    lv_msgbox_close_async((lv_obj_t *)lv_event_get_user_data(e));
+}
+
+static void on_cur_btn(lv_event_t *e)
+{
+    weight_wifi_info_t wi;
+    weight_wifi_get_info(&wi);
+
+    if (wi.state == WEIGHT_WIFI_DISCONNECTED)
+    {
+        weight_wifi_reconnect();
+        return;
+    }
+
+    lv_obj_t *mbox = lv_msgbox_create(NULL); /* modal on top layer */
+    lv_obj_set_style_text_font(mbox, ui_font_normal(), 0);
+    lv_msgbox_add_text(mbox, TR(wifi_disconnect_confirm));
+    lv_obj_t *cancel = lv_msgbox_add_footer_button(mbox, TR(edit_cancel));
+    lv_obj_add_event_cb(cancel, on_disc_cancel, LV_EVENT_CLICKED, mbox);
+    lv_obj_t *ok = lv_msgbox_add_footer_button(mbox, TR(wifi_disconnect));
+    lv_obj_set_style_bg_color(ok, UI_COLOR_HIGH_DARK, 0);
+    lv_obj_add_event_cb(ok, on_disc_confirm, LV_EVENT_CLICKED, mbox);
 }
 
 /* ---------------------------------------------------------------------------
@@ -225,15 +252,73 @@ static void populate_ssid_list(void)
 
 static void refresh_conn_status(void)
 {
-    if (weight_wifi_is_connected())
+    weight_wifi_info_t wi;
+    weight_wifi_get_info(&wi);
+
+    char detail[96];
+    const char *ssid_txt = wi.ssid[0] ? wi.ssid : TR(wifi_not_connected);
+    const char *short_txt;
+    lv_color_t detail_col = UI_COLOR_TEXT_MUTED;
+    bool show_btn = true;
+    bool reconnect_btn = false;
+
+    switch (wi.state)
     {
-        lv_label_set_text(s_conn_status_lbl, LV_SYMBOL_OK " Connected");
-        lv_obj_set_style_text_color(s_conn_status_lbl, UI_COLOR_ACCENT, 0);
+    case WEIGHT_WIFI_CONNECTED:
+        snprintf(detail, sizeof(detail), LV_SYMBOL_WIFI " %d dBm    %s    %s",
+                 wi.rssi, wi.ip, wi.static_ip ? "Static" : "DHCP");
+        detail_col = UI_COLOR_ACCENT;
+        short_txt = LV_SYMBOL_OK " Connected";
+        break;
+    case WEIGHT_WIFI_CONNECTING:
+        snprintf(detail, sizeof(detail), "%s    %s", TR(wifi_connecting),
+                 wi.static_ip ? "Static" : "DHCP");
+        short_txt = "Connecting...";
+        break;
+    case WEIGHT_WIFI_DISCONNECTED:
+        snprintf(detail, sizeof(detail), "%s    %s", TR(wifi_disconnected_manual),
+                 wi.static_ip ? "Static" : "DHCP");
+        short_txt = "Disconnected";
+        reconnect_btn = true;
+        break;
+    default:
+        ssid_txt = TR(wifi_not_connected);
+        snprintf(detail, sizeof(detail), "%s", TR(wifi_select_network));
+        short_txt = "Disconnected";
+        show_btn = false;
+        break;
+    }
+
+    lv_label_set_text(s_cur_ssid_lbl, ssid_txt);
+    lv_label_set_text(s_cur_detail_lbl, detail);
+    lv_obj_set_style_text_color(s_cur_detail_lbl, detail_col, 0);
+
+    if (show_btn)
+    {
+        lv_obj_clear_flag(s_cur_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_label_set_text(s_cur_btn_lbl, reconnect_btn ? TR(wifi_reconnect) : TR(wifi_disconnect));
+        lv_obj_set_style_bg_color(s_cur_btn, reconnect_btn ? UI_COLOR_ACCENT : UI_COLOR_HIGH_DARK, 0);
     }
     else
     {
-        lv_label_set_text(s_conn_status_lbl, "Disconnected");
-        lv_obj_set_style_text_color(s_conn_status_lbl, UI_COLOR_TEXT_MUTED, 0);
+        lv_obj_add_flag(s_cur_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    lv_label_set_text(s_conn_status_lbl, short_txt);
+    lv_obj_set_style_text_color(s_conn_status_lbl,
+                                wi.state == WEIGHT_WIFI_CONNECTED ? UI_COLOR_ACCENT : UI_COLOR_TEXT_MUTED, 0);
+
+    /* New network rejected -> explain in the password panel (only while the
+     * user isn't typing a password for another network) */
+    if (wi.new_creds_failed && s_selected_ssid[0] == '\0')
+    {
+        const char *why = wi.fail == WEIGHT_WIFI_FAIL_AUTH        ? TR(wifi_wrong_password)
+                          : wi.fail == WEIGHT_WIFI_FAIL_NOT_FOUND ? TR(wifi_ap_not_found)
+                                                                  : TR(wifi_join_error);
+        char msg[128];
+        snprintf(msg, sizeof(msg), "%s \"%s\": %s", TR(wifi_join_failed), wi.failed_ssid, why);
+        lv_label_set_text(s_pwd_label, msg);
+        lv_obj_set_style_text_color(s_pwd_label, lv_palette_lighten(LV_PALETTE_RED, 1), 0);
     }
 }
 
@@ -379,6 +464,7 @@ static void on_ip_save(lv_event_t *e)
 
     close_ip_popup();
     refresh_net_status();
+    refresh_conn_status();
 }
 
 static lv_obj_t *make_ip_field_row(lv_obj_t *parent, const char *label,
@@ -418,11 +504,6 @@ static void on_ip_settings_open(lv_event_t *e)
 {
     if (s_ip_popup)
         return;
-    if (s_scan_in_progress)
-    {
-        ESP_LOGW(TAG, "ip settings: scan in progress, ignoring");
-        return;
-    }
 
     ESP_LOGI(TAG, "opening ip settings, free heap: %u bytes",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT));
@@ -628,17 +709,54 @@ lv_obj_t *screen_wifi_create(void)
     lv_obj_align_to(rescan_txt, rescan_sym, LV_ALIGN_OUT_RIGHT_MID, 4, 0);
 
     /* IP settings button - left of rescan (topbar exists here, fine) */
-    lv_obj_t *ip_btn = lv_btn_create(topbar);
-    lv_obj_set_size(ip_btn, 140, 40);
-    lv_obj_align(ip_btn, LV_ALIGN_RIGHT_MID, -150, 0);
-    lv_obj_set_style_bg_color(ip_btn, UI_COLOR_PANEL_ALT, 0);
-    lv_obj_set_style_radius(ip_btn, UI_RADIUS_S, 0);
-    lv_obj_add_event_cb(ip_btn, on_ip_settings_open, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *ip_btn_lbl = lv_label_create(ip_btn);
-    lv_obj_set_style_text_font(ip_btn_lbl, ui_font_small(), 0);
-    lv_obj_set_style_text_color(ip_btn_lbl, UI_COLOR_TEXT, 0);
-    lv_label_set_text(ip_btn_lbl, "IP Settings");
-    lv_obj_center(ip_btn_lbl);
+    /* Left top: current network card */
+    lv_obj_t *card = lv_obj_create(scr);
+    lv_obj_set_size(card, WIFI_LEFT_PANEL_W - 2 * UI_PAD, WIFI_CUR_CARD_H);
+    lv_obj_align(card, LV_ALIGN_TOP_LEFT, UI_PAD, 60 + UI_PAD);
+    lv_obj_set_style_bg_color(card, UI_COLOR_PANEL, 0);
+    lv_obj_set_style_border_width(card, 0, 0);
+    lv_obj_set_style_radius(card, UI_RADIUS_S, 0);
+    lv_obj_set_style_pad_all(card, 12, 0);
+    lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *cur_title = lv_label_create(card);
+    lv_obj_set_style_text_color(cur_title, UI_COLOR_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(cur_title, ui_font_small(), 0);
+    lv_label_set_text(cur_title, TR(wifi_current));
+    lv_obj_align(cur_title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_cur_ssid_lbl = lv_label_create(card);
+    lv_obj_set_width(s_cur_ssid_lbl, WIFI_LEFT_PANEL_W - 2 * UI_PAD - 24 - 150);
+    lv_label_set_long_mode(s_cur_ssid_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_color(s_cur_ssid_lbl, UI_COLOR_TEXT, 0);
+    lv_obj_set_style_text_font(s_cur_ssid_lbl, ui_font_normal(), 0);
+    lv_obj_align(s_cur_ssid_lbl, LV_ALIGN_TOP_LEFT, 0, 22);
+
+    lv_obj_t *ip_btn2 = lv_btn_create(card);
+    lv_obj_set_size(ip_btn2, 100, 52);
+    lv_obj_align(ip_btn2, LV_ALIGN_RIGHT_MID, -150, 0);
+    lv_obj_set_style_bg_color(ip_btn2, UI_COLOR_PANEL_ALT, 0);
+    lv_obj_set_style_radius(ip_btn2, UI_RADIUS_S, 0);
+    lv_obj_add_event_cb(ip_btn2, on_ip_settings_open, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ip_lbl2 = lv_label_create(ip_btn2);
+    lv_obj_set_style_text_font(ip_lbl2, ui_font_small(), 0);
+    lv_obj_set_style_text_color(ip_lbl2, UI_COLOR_TEXT, 0);
+    lv_label_set_text(ip_lbl2, "IP");
+    lv_obj_center(ip_lbl2);
+
+    s_cur_detail_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(s_cur_detail_lbl, ui_font_small(), 0);
+    lv_obj_align(s_cur_detail_lbl, LV_ALIGN_TOP_LEFT, 0, 52);
+
+    s_cur_btn = lv_btn_create(card);
+    lv_obj_set_size(s_cur_btn, 140, 52);
+    lv_obj_align(s_cur_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_radius(s_cur_btn, UI_RADIUS_S, 0);
+    lv_obj_add_event_cb(s_cur_btn, on_cur_btn, LV_EVENT_CLICKED, NULL);
+    s_cur_btn_lbl = lv_label_create(s_cur_btn);
+    lv_obj_set_style_text_font(s_cur_btn_lbl, ui_font_normal(), 0);
+    lv_obj_set_style_text_color(s_cur_btn_lbl, UI_COLOR_TEXT, 0);
+    lv_obj_center(s_cur_btn_lbl);
 
     /* Left: SSID list */
     s_ssid_list = lv_obj_create(scr);

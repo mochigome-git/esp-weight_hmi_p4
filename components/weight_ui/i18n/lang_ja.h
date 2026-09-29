@@ -29,6 +29,12 @@ static const weight_lang_t LANG_JA = {
     .main_field_lower = "下限",
     .main_alert_high = "上限を超えています",
     .main_alert_low = "下限を下回っています",
+    .main_btn_new_lot = "新規ロット",
+    .main_lot_confirm = "新しいロットを開始しますか?",
+    .main_lot_confirm_btn = "開始",
+    .main_lot_sent = "新規ロットを要求しました",
+    .main_lot_offline = "失敗 - MQTT未接続",
+    .main_lot_no_machine = "マシンIDが未設定です (設定 > デバイス)",
 
     // screen_models
     .models_title_fmt = "モデル一覧 (%u)",
@@ -104,6 +110,17 @@ static const weight_lang_t LANG_JA = {
     .wifi_password_for = "パスワード",
     .wifi_connect = "接続",
     .wifi_no_password = "(パスワードなし)",
+    .wifi_current = "現在のネットワーク",
+    .wifi_not_connected = "未接続",
+    .wifi_connecting = "接続中...",
+    .wifi_disconnect = "切断",
+    .wifi_reconnect = "再接続",
+    .wifi_disconnect_confirm = "WiFiを切断しますか? 再接続するまでデータは送信されません。",
+    .wifi_disconnected_manual = "切断中 (自動再接続オフ)",
+    .wifi_join_failed = "接続できません",
+    .wifi_wrong_password = "パスワードが違います",
+    .wifi_ap_not_found = "ネットワークが見つかりません",
+    .wifi_join_error = "接続失敗",
 
     // screen_mqtt
     .mqtt_title = "MQTT設定",

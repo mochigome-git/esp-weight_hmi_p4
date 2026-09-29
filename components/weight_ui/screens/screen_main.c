@@ -18,6 +18,8 @@
 #include "weight_state.h"
 #include "weight_config.h"
 #include "weight_model_store.h"
+#include "esp_timer.h"
+#include "weight_mqtt.h"
 
 static const char *TAG = "scr_main";
 
@@ -45,11 +47,17 @@ static lv_obj_t *s_runstop_lbl;
 static lv_obj_t *s_alert_banner;
 static lv_obj_t *s_alert_text;
 static lv_obj_t *s_model_dropdown;
+static lv_obj_t *s_newlot_btn;
+static lv_obj_t *s_lot_popup = NULL;
+static int64_t s_last_lot_us = 0;
 static size_t s_last_model_count = (size_t)-1;
 
 static lv_timer_t *s_resume_delay_timer = NULL;
 
 static weight_status_t s_last_card_status = (weight_status_t)-1;
+
+#define LOT_COOLDOWN_US (3 * 1000000LL)
+
 /* ---------------------------------------------------------------------------
  * Helpers
  * --------------------------------------------------------------------------- */
@@ -119,6 +127,43 @@ static void rebuild_model_dropdown(void)
         snprintf(buf, sizeof(buf), "%s", TR(main_model_none));
 
     lv_dropdown_set_options(s_model_dropdown, buf);
+}
+
+static void toast_timer_cb(lv_timer_t *t)
+{
+    lv_obj_t *toast = (lv_obj_t *)lv_timer_get_user_data(t);
+    if (toast)
+        lv_obj_delete(toast);
+}
+
+static void show_toast(const char *msg, lv_color_t bg)
+{
+    lv_obj_t *toast = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(toast, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(toast, bg, 0);
+    lv_obj_set_style_border_width(toast, 0, 0);
+    lv_obj_set_style_radius(toast, UI_RADIUS, 0);
+    lv_obj_set_style_pad_hor(toast, 28, 0);
+    lv_obj_set_style_pad_ver(toast, 16, 0);
+    lv_obj_clear_flag(toast, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(toast, LV_ALIGN_TOP_MID, 0, 60);
+
+    lv_obj_t *l = lv_label_create(toast);
+    lv_obj_set_style_text_color(l, UI_COLOR_TEXT, 0);
+    lv_obj_set_style_text_font(l, ui_font_normal(), 0);
+    lv_label_set_text(l, msg);
+
+    lv_timer_t *t = lv_timer_create(toast_timer_cb, 2500, toast);
+    lv_timer_set_repeat_count(t, 1);
+}
+
+static void close_lot_popup(void)
+{
+    if (s_lot_popup)
+    {
+        lv_obj_delete_async(s_lot_popup); /* called from a child's event - don't delete synchronously */
+        s_lot_popup = NULL;
+    }
 }
 
 /* ---------------------------------------------------------------------------
@@ -242,6 +287,77 @@ static void on_model_picked(lv_event_t *e)
         }
         idx_alive++;
     }
+}
+
+static void on_lot_cancel(lv_event_t *e) { close_lot_popup(); }
+
+static void on_lot_confirm(lv_event_t *e)
+{
+    close_lot_popup();
+    esp_err_t err = weight_mqtt_publish_new_lot();
+    if (err == ESP_OK)
+    {
+        s_last_lot_us = esp_timer_get_time();
+        show_toast(TR(main_lot_sent), UI_COLOR_PASS_DARK);
+    }
+    else if (err == ESP_ERR_NOT_FOUND)
+        show_toast(TR(main_lot_no_machine), UI_COLOR_HIGH_DARK);
+    else
+        show_toast(TR(main_lot_offline), UI_COLOR_HIGH_DARK);
+}
+
+static void on_newlot_btn(lv_event_t *e)
+{
+    if (s_lot_popup)
+        return;
+    if (s_last_lot_us && esp_timer_get_time() - s_last_lot_us < LOT_COOLDOWN_US)
+        return; /* swallow accidental double taps */
+
+    s_lot_popup = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_lot_popup, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(s_lot_popup, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(s_lot_popup, LV_OPA_60, 0);
+    lv_obj_set_style_border_width(s_lot_popup, 0, 0);
+    lv_obj_set_style_radius(s_lot_popup, 0, 0);
+    lv_obj_clear_flag(s_lot_popup, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_lot_popup, LV_OBJ_FLAG_CLICKABLE); /* block touches behind */
+
+    lv_obj_t *modal = lv_obj_create(s_lot_popup);
+    lv_obj_set_size(modal, 520, 220);
+    lv_obj_center(modal);
+    lv_obj_set_style_bg_color(modal, UI_COLOR_PANEL, 0);
+    lv_obj_set_style_border_width(modal, 0, 0);
+    lv_obj_set_style_radius(modal, UI_RADIUS_S, 0);
+    lv_obj_set_style_pad_all(modal, UI_PAD * 2, 0);
+    lv_obj_clear_flag(modal, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *msg = lv_label_create(modal);
+    lv_obj_set_style_text_color(msg, UI_COLOR_TEXT, 0);
+    lv_obj_set_style_text_font(msg, ui_font_large(), 0);
+    lv_label_set_text(msg, TR(main_lot_confirm));
+    lv_obj_align(msg, LV_ALIGN_TOP_MID, 0, 10);
+
+    lv_obj_t *cancel = lv_btn_create(modal);
+    lv_obj_set_size(cancel, 200, 64);
+    lv_obj_align(cancel, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(cancel, UI_COLOR_PANEL_ALT, 0);
+    lv_obj_set_style_radius(cancel, UI_RADIUS_S, 0);
+    lv_obj_add_event_cb(cancel, on_lot_cancel, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *cl = lv_label_create(cancel);
+    lv_label_set_text(cl, TR(edit_cancel));
+    lv_obj_set_style_text_font(cl, ui_font_normal(), 0);
+    lv_obj_center(cl);
+
+    lv_obj_t *ok = lv_btn_create(modal);
+    lv_obj_set_size(ok, 200, 64);
+    lv_obj_align(ok, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(ok, UI_COLOR_LOW_DARK, 0);
+    lv_obj_set_style_radius(ok, UI_RADIUS_S, 0);
+    lv_obj_add_event_cb(ok, on_lot_confirm, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *okl = lv_label_create(ok);
+    lv_label_set_text(okl, TR(main_lot_confirm_btn));
+    lv_obj_set_style_text_font(okl, ui_font_normal(), 0);
+    lv_obj_center(okl);
 }
 
 /* ---------------------------------------------------------------------------
@@ -602,6 +718,25 @@ lv_obj_t *screen_main_create(void)
     lv_obj_set_style_text_font(s_runstop_lbl, ui_font_large(), 0);
     lv_obj_set_style_text_color(s_runstop_lbl, UI_COLOR_TEXT, 0);
     lv_obj_center(s_runstop_lbl);
+
+    /* Flex filler: eats all remaining height so NEW LOT sits at the bottom,
+     * well away from READY/STOP. */
+    lv_obj_t *fill = lv_obj_create(right);
+    lv_obj_remove_style_all(fill);
+    lv_obj_set_width(fill, LV_PCT(100));
+    lv_obj_set_flex_grow(fill, 1);
+    lv_obj_clear_flag(fill, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+    s_newlot_btn = lv_btn_create(right);
+    lv_obj_set_size(s_newlot_btn, LV_PCT(100), 64);
+    lv_obj_set_style_bg_color(s_newlot_btn, UI_COLOR_LOW_DARK, 0); /* amber, not green */
+    lv_obj_set_style_radius(s_newlot_btn, UI_RADIUS, 0);
+    lv_obj_add_event_cb(s_newlot_btn, on_newlot_btn, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *nl = lv_label_create(s_newlot_btn);
+    lv_label_set_text(nl, TR(main_btn_new_lot));
+    lv_obj_set_style_text_font(nl, ui_font_large(), 0);
+    lv_obj_set_style_text_color(nl, UI_COLOR_TEXT, 0);
+    lv_obj_center(nl);
 
     /* ----- Weight card ----- */
     s_weight_card = lv_obj_create(scr);

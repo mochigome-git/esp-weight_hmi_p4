@@ -33,6 +33,12 @@ typedef struct
     const char *main_field_lower;
     const char *main_alert_high;
     const char *main_alert_low;
+    const char *main_btn_new_lot;
+    const char *main_lot_confirm;
+    const char *main_lot_confirm_btn;
+    const char *main_lot_sent;
+    const char *main_lot_offline;
+    const char *main_lot_no_machine;
 
     // --- screen_models ---
     const char *models_title_fmt; /* "Models (%u)" format */
@@ -108,6 +114,17 @@ typedef struct
     const char *wifi_password_for;
     const char *wifi_connect;
     const char *wifi_no_password;
+    const char *wifi_current;
+    const char *wifi_not_connected;
+    const char *wifi_connecting;
+    const char *wifi_disconnect;
+    const char *wifi_reconnect;
+    const char *wifi_disconnect_confirm;
+    const char *wifi_disconnected_manual;
+    const char *wifi_join_failed;
+    const char *wifi_wrong_password;
+    const char *wifi_ap_not_found;
+    const char *wifi_join_error;
 
     // --- screen_mqtt ---
     const char *mqtt_title;

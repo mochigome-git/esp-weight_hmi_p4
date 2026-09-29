@@ -64,6 +64,9 @@ extern "C"
 
     esp_err_t weight_mqtt_publish_model_delete(const char *id);
 
+    /* Returns ESP_ERR_NOT_FOUND if machine_id unset, ESP_ERR_INVALID_STATE if offline. */
+    esp_err_t weight_mqtt_publish_new_lot(void);
+
 #ifdef __cplusplus
 }
 #endif

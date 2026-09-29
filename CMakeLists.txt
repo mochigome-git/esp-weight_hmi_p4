@@ -5,22 +5,34 @@ cmake_minimum_required(VERSION 3.16)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
-# Pull in custom components folder
 set(EXTRA_COMPONENT_DIRS "${CMAKE_SOURCE_DIR}/components")
 
-# Default device ID, read from DEVICE_ID file at project root.
-# Only takes effect on first boot / if NVS has no saved device ID -
-# manually editing the Device ID on the HMI's Settings screen always
-# takes priority once saved. Edit DEVICE_ID before flashing each unit.
-# This one is fine as a compile define since it's edited rarely
-# (once per physical unit, right before flashing that unit).
-if(EXISTS "${CMAKE_SOURCE_DIR}/DEVICE_ID")
-    file(STRINGS "${CMAKE_SOURCE_DIR}/DEVICE_ID" DEFAULT_DEVICE_ID)
-    string(STRIP "${DEFAULT_DEVICE_ID}" DEFAULT_DEVICE_ID)
-    add_compile_definitions(DEFAULT_DEVICE_ID="${DEFAULT_DEVICE_ID}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-        "${CMAKE_SOURCE_DIR}/DEVICE_ID")
-endif()
+# Reads a UUID from a file at project root and exposes it as DEFAULT_<NAME>.
+# Only used when NVS has no saved value (see weight_config.c).
+function(read_uuid_file name)
+    set(path "${CMAKE_SOURCE_DIR}/${name}")
+    if(NOT EXISTS "${path}")
+        message(WARNING "${name} file not found - no default ${name} compiled in")
+        return()
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
+
+    file(STRINGS "${path}" val LIMIT_COUNT 1)
+    string(STRIP "${val}" val)
+    string(TOLOWER "${val}" val)
+    string(LENGTH "${val}" len)
+    # CMake regex has no {n} quantifier, so check shape + length
+    if(NOT len EQUAL 36 OR
+       NOT val MATCHES "^[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+-[0-9a-f]+$")
+        message(FATAL_ERROR "${name} does not contain a valid UUID: '${val}'")
+    endif()
+
+    add_compile_definitions(DEFAULT_${name}="${val}")
+    message(STATUS "Default ${name}: ${val}")
+endfunction()
+
+read_uuid_file(DEVICE_ID)
+read_uuid_file(MACHINE_ID)
 
 project(esp-weight_hmi_p4)
 
