@@ -806,14 +806,20 @@ static void on_device_save(lv_event_t *e)
     }
 
     bool id_changed = strcmp(weight_config_get()->device_id, id) != 0;
+    bool mid_changed = strcmp(weight_config_get()->machine_id, mid) != 0;
 
     weight_config_set_device_name(lv_textarea_get_text(s_dev_name_ta));
     weight_config_set_device_id(id);
     weight_config_set_machine_id(mid);
     weight_config_save();
 
+    if (id_changed || mid_changed)
+        weight_state_clear_lot(); /* lot belongs to the old machine */
+
     if (id_changed)
-        xTaskCreate(dev_mqtt_restart_task, "mqtt_rst", 4096, NULL, 5, NULL);
+        xTaskCreate(dev_mqtt_restart_task, "mqtt_rst", 4096, NULL, 5, NULL); /* re-asks lot on connect */
+    else if (mid_changed)
+        weight_mqtt_request_lot();
 
     close_device_popup();
     refresh_values();

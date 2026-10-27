@@ -48,6 +48,9 @@ static lv_obj_t *s_alert_banner;
 static lv_obj_t *s_alert_text;
 static lv_obj_t *s_model_dropdown;
 static lv_obj_t *s_newlot_btn;
+static lv_obj_t *s_lot_val_lbl;   /* "#3" / "no active lot" / "--" */
+static lv_obj_t *s_lot_since_lbl; /* "since 09:36" / "requesting..." */
+static uint32_t s_seen_lot_seq;   /* last NEW LOT result already toasted */
 static lv_obj_t *s_lot_popup = NULL;
 static int64_t s_last_lot_us = 0;
 static size_t s_last_model_count = (size_t)-1;
@@ -57,6 +60,7 @@ static lv_timer_t *s_resume_delay_timer = NULL;
 static weight_status_t s_last_card_status = (weight_status_t)-1;
 
 #define LOT_COOLDOWN_US (3 * 1000000LL)
+#define LOT_ACK_TIMEOUT_US (10 * 1000000LL) /* give up waiting for lot/ack */
 
 /* ---------------------------------------------------------------------------
  * Helpers
@@ -183,6 +187,8 @@ static void apply_fonts(void)
     lv_obj_set_style_text_font(s_status_pill_lbl, ui_font_small(), 0);
     lv_obj_set_style_text_font(s_model_dropdown, ui_font_small(), LV_PART_MAIN);
     lv_obj_set_style_text_font(s_runstop_lbl, ui_font_large(), 0);
+    lv_obj_set_style_text_font(s_lot_val_lbl, ui_font_large(), 0);
+    lv_obj_set_style_text_font(s_lot_since_lbl, ui_font_small(), 0);
     /* + the make_field() labels if you keep pointers to their label/value objs */
 }
 
@@ -449,6 +455,68 @@ static void refresh_cb(lv_timer_t *t)
         lv_label_set_text(s_upper_lbl, "");
         lv_label_set_text(s_std_lbl, "");
         lv_label_set_text(s_lower_lbl, "");
+    }
+
+    /* Current lot card */
+    if (snap.lot_req_pending &&
+        esp_timer_get_time() - snap.lot_req_since_us > LOT_ACK_TIMEOUT_US)
+    {
+        weight_state_lot_request_finish(WEIGHT_LOT_RESULT_TIMEOUT);
+        weight_state_get_snapshot(&snap); /* pick up the finished request */
+    }
+
+    if (snap.lot_known && snap.lot_active)
+    {
+        snprintf(buf, sizeof(buf), "#%ld", (long)snap.lot_number);
+        set_text_if_changed(s_lot_val_lbl, buf);
+        lv_obj_set_style_text_color(s_lot_val_lbl, UI_COLOR_TEXT, 0);
+    }
+    else
+    {
+        set_text_if_changed(s_lot_val_lbl, snap.lot_known ? TR(main_lot_none) : "--");
+        lv_obj_set_style_text_color(s_lot_val_lbl, UI_COLOR_TEXT_DIM, 0);
+    }
+
+    if (snap.lot_req_pending)
+    {
+        set_text_if_changed(s_lot_since_lbl, TR(main_lot_pending));
+        lv_obj_set_style_text_color(s_lot_since_lbl, UI_COLOR_ACCENT, 0);
+    }
+    else
+    {
+        char hhmm[8] = "";
+        if (snap.lot_known && snap.lot_active && snap.lot_started_ts > 0)
+        {
+            struct tm lt;
+            localtime_r(&snap.lot_started_ts, &lt);
+            snprintf(hhmm, sizeof(hhmm), "%02d:%02d", lt.tm_hour, lt.tm_min);
+            snprintf(buf, sizeof(buf), TR(main_lot_since_fmt), hhmm);
+        }
+        else
+            buf[0] = '\0';
+        set_text_if_changed(s_lot_since_lbl, buf);
+        lv_obj_set_style_text_color(s_lot_since_lbl, UI_COLOR_TEXT_MUTED, 0);
+    }
+
+    /* NEW LOT outcome -> one toast per finished request */
+    if (snap.lot_result_seq != s_seen_lot_seq)
+    {
+        s_seen_lot_seq = snap.lot_result_seq;
+        switch (snap.lot_result)
+        {
+        case WEIGHT_LOT_RESULT_OK:
+            snprintf(buf, sizeof(buf), TR(main_lot_ok_fmt), (long)snap.lot_number);
+            show_toast(buf, UI_COLOR_PASS_DARK);
+            break;
+        case WEIGHT_LOT_RESULT_ERROR:
+            show_toast(TR(main_lot_failed), UI_COLOR_HIGH_DARK);
+            break;
+        case WEIGHT_LOT_RESULT_TIMEOUT:
+            show_toast(TR(main_lot_timeout), UI_COLOR_HIGH_DARK);
+            break;
+        default:
+            break;
+        }
     }
 
     /* RUN/STOP button */
@@ -726,6 +794,44 @@ lv_obj_t *screen_main_create(void)
     lv_obj_set_width(fill, LV_PCT(100));
     lv_obj_set_flex_grow(fill, 1);
     lv_obj_clear_flag(fill, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Current lot card - sits right above NEW LOT so the operator sees
+     * which lot they are in before (and after) pressing it. */
+    lv_obj_t *lot_card = lv_obj_create(right);
+    lv_obj_set_size(lot_card, LV_PCT(100), 76);
+    lv_obj_set_style_bg_color(lot_card, UI_COLOR_PANEL, 0);
+    lv_obj_set_style_border_side(lot_card, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_border_width(lot_card, 4, 0);
+    lv_obj_set_style_border_color(lot_card, UI_COLOR_LOW, 0); /* same amber as NEW LOT */
+    lv_obj_set_style_radius(lot_card, UI_RADIUS_S, 0);
+    lv_obj_set_style_pad_hor(lot_card, 10, 0);
+    lv_obj_set_style_pad_ver(lot_card, 6, 0);
+    lv_obj_clear_flag(lot_card, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lot_title = lv_label_create(lot_card);
+    lv_obj_set_style_text_color(lot_title, UI_COLOR_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(lot_title, ui_font_small(), 0);
+    lv_label_set_text(lot_title, TR(main_lot_current));
+    lv_obj_align(lot_title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_lot_since_lbl = lv_label_create(lot_card);
+    lv_obj_set_style_text_color(s_lot_since_lbl, UI_COLOR_TEXT_MUTED, 0);
+    lv_obj_set_style_text_font(s_lot_since_lbl, ui_font_small(), 0);
+    lv_label_set_text(s_lot_since_lbl, "");
+    lv_obj_align(s_lot_since_lbl, LV_ALIGN_TOP_RIGHT, 0, 0);
+
+    s_lot_val_lbl = lv_label_create(lot_card);
+    lv_obj_set_style_text_color(s_lot_val_lbl, UI_COLOR_TEXT_DIM, 0);
+    lv_obj_set_style_text_font(s_lot_val_lbl, ui_font_large(), 0);
+    lv_label_set_text(s_lot_val_lbl, "--");
+    lv_obj_align(s_lot_val_lbl, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
+    {
+        /* Don't toast an old result when the screen is (re)built */
+        weight_state_snapshot_t snap0;
+        weight_state_get_snapshot(&snap0);
+        s_seen_lot_seq = snap0.lot_result_seq;
+    }
 
     s_newlot_btn = lv_btn_create(right);
     lv_obj_set_size(s_newlot_btn, LV_PCT(100), 64);

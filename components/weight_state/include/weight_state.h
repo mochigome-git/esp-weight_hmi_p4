@@ -44,6 +44,15 @@ extern "C"
         WEIGHT_MODE_RUN,      /* model selected, READY pressed, publishing on stable readings */
     } weight_mode_t;
 
+    /* Outcome of a NEW LOT request */
+    typedef enum
+    {
+        WEIGHT_LOT_RESULT_NONE = 0,
+        WEIGHT_LOT_RESULT_OK,      /* bridge inserted the lot */
+        WEIGHT_LOT_RESULT_ERROR,   /* bridge answered ok=false */
+        WEIGHT_LOT_RESULT_TIMEOUT, /* no answer in time */
+    } weight_lot_result_t;
+
     /* Active model parameters (denormalised from weight_model_store for fast access) */
     typedef struct
     {
@@ -88,6 +97,20 @@ extern "C"
         /* Connectivity */
         bool wifi_connected;
         bool mqtt_connected;
+
+        /* Current production lot of this machine (from goweight-bridge lot/ack).
+         * lot_known=false: not answered yet (offline / no machine id / just
+         * booted). lot_known && !lot_active: machine has no active lot. */
+        bool lot_known;
+        bool lot_active;
+        int64_t lot_number;
+        time_t lot_started_ts; /* production.lot.created_at, 0 if unknown */
+
+        /* NEW LOT request round-trip, for UI feedback */
+        bool lot_req_pending;
+        int64_t lot_req_since_us;      /* esp_timer time when request was sent */
+        uint32_t lot_result_seq;       /* bumps on every finished NEW LOT request */
+        weight_lot_result_t lot_result; /* outcome of the latest finished request */
     } weight_state_snapshot_t;
 
     /* Called (outside the state lock) whenever the mode or the active model
@@ -128,6 +151,18 @@ extern "C"
     /* Connectivity flags */
     void weight_state_set_wifi(bool connected);
     void weight_state_set_mqtt(bool connected);
+
+    /* Current lot (called from the MQTT task on lot/ack).
+     * active=false means the machine has no active lot. */
+    void weight_state_set_lot(bool active, int64_t lot_number, time_t started_ts);
+    /* Forget the current lot (e.g. machine id changed) */
+    void weight_state_clear_lot(void);
+
+    /* NEW LOT round-trip: begin when the request is queued, finish when the
+     * ack arrives or the UI gives up waiting. finish() is a no-op if no
+     * request is pending, so a late ack after a timeout is harmless. */
+    void weight_state_lot_request_begin(void);
+    void weight_state_lot_request_finish(weight_lot_result_t result);
 
     /* ---------- Convenience getters (read with mutex) ---------- */
     weight_mode_t weight_state_get_mode(void);

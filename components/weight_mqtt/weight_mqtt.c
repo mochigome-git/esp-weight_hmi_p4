@@ -4,8 +4,9 @@
  * esp-mqtt based client. Settings come from weight_config (host, port, user,
  * pass, tls). CA cert is loaded from NVS via weight_config_get_ca_cert.
  *
- * Reconnects automatically. On every (re)connect: subscribe model sync topic,
- * publish status + heartbeat, request a full resync, flush offline readings.
+ * Reconnects automatically. On every (re)connect: subscribe model sync + lot
+ * ack topics, publish status + heartbeat, request a full resync, ask for the
+ * machine's current lot, flush offline readings.
  *
  * Concurrency rules
  *   - s_client_mtx guards the LIFETIME of s_client. Every public function
@@ -65,6 +66,8 @@ static char s_topic_sync_sub[96];
 static char s_topic_payload[96];
 static char s_topic_model_push[96];
 static char s_topic_lot_new[96];
+static char s_topic_lot_get[96];
+static char s_topic_lot_ack[96];
 static char s_dev_id[WCFG_MAX_DEVICE_ID_LEN]; /* id used in topics / client id / LWT */
 
 /* Custom CA cert (PEM) from NVS; must outlive the client (not copied by esp-mqtt) */
@@ -84,6 +87,12 @@ static uint32_t s_ring_dropped;
 static char *s_rx_buf;
 static int s_rx_total;
 static bool s_rx_skip;
+static bool s_rx_is_lot; /* current message arrived on s_topic_lot_ack */
+
+/* request_id of the NEW LOT request we are waiting for ("" = none).
+ * Written by the LVGL task, read by the MQTT task. */
+static char s_lot_req_id[40];
+static portMUX_TYPE s_lot_mux = portMUX_INITIALIZER_UNLOCKED;
 
 /* ============================================================================
  * Small helpers
@@ -172,6 +181,8 @@ static void build_topics_locked(void)
     snprintf(s_topic_payload, sizeof(s_topic_payload), "%s/devices/payload", t);
     snprintf(s_topic_model_push, sizeof(s_topic_model_push), "%s/models/push", t); /* no device_id */
     snprintf(s_topic_lot_new, sizeof(s_topic_lot_new), "%s/%s/lot/new", t, s_dev_id);
+    snprintf(s_topic_lot_get, sizeof(s_topic_lot_get), "%s/%s/lot/get", t, s_dev_id);
+    snprintf(s_topic_lot_ack, sizeof(s_topic_lot_ack), "%s/%s/lot/ack", t, s_dev_id);
 
     ESP_LOGI(TAG, "topics: reading=%s status=%s sync_sub=%s",
              s_topic_reading, s_topic_status, s_topic_sync_sub);
@@ -331,6 +342,121 @@ static int request_sync_c(esp_mqtt_client_handle_t c)
     return enqueue_c(c, s_topic_sync_req, "{\"action\":\"resync\"}", 1, 0);
 }
 
+/* Ask goweight-bridge for this machine's current active lot. The answer
+ * comes back on s_topic_lot_ack with "query":true. */
+static int lot_get_c(esp_mqtt_client_handle_t c)
+{
+    char machine_id[WCFG_MAX_MACHINE_ID_LEN];
+    weight_config_lock();
+    strlcpy(machine_id, weight_config_get()->machine_id, sizeof(machine_id));
+    weight_config_unlock();
+    if (machine_id[0] == '\0')
+    {
+        weight_state_clear_lot(); /* no machine -> nothing to show */
+        return -1;
+    }
+
+    char req_id[37];
+    weight_model_store_new_id(req_id, sizeof(req_id));
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root)
+        return -1;
+    cJSON_AddStringToObject(root, "request_id", req_id);
+    cJSON_AddStringToObject(root, "machine_id", machine_id);
+    char *payload = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!payload)
+        return -1;
+    int id = enqueue_c(c, s_topic_lot_get, payload, 1, 0);
+    ESP_LOGI(TAG, "lot/get -> %s (msg %d)", s_topic_lot_get, id);
+    free(payload);
+    return id;
+}
+
+/* ---- lot/ack ---- */
+
+/* Parse "2026-10-27T00:36:45.583293+00:00" (Postgres timestamptz in JSON) to
+ * epoch seconds. Fraction ignored; numeric offset honoured. 0 on failure. */
+static time_t parse_iso8601(const char *s)
+{
+    int y, mo, d, h, mi, sec;
+    if (!s || sscanf(s, "%4d-%2d-%2dT%2d:%2d:%2d", &y, &mo, &d, &h, &mi, &sec) != 6)
+        return 0;
+
+    /* days from civil (Howard Hinnant), no timegm() dependency */
+    int yy = y - (mo <= 2);
+    int era = (yy >= 0 ? yy : yy - 399) / 400;
+    unsigned yoe = (unsigned)(yy - era * 400);
+    unsigned doy = (153 * (mo + (mo > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int64_t days = (int64_t)era * 146097 + (int64_t)doe - 719468;
+    int64_t t = days * 86400 + h * 3600 + mi * 60 + sec;
+
+    /* offset: find +HH:MM / -HH:MM after the seconds, or Z */
+    const char *p = s + 19;
+    while (*p == '.' || (*p >= '0' && *p <= '9'))
+        p++;
+    if (*p == '+' || *p == '-')
+    {
+        int oh = 0, om = 0;
+        sscanf(p + 1, "%2d:%2d", &oh, &om);
+        int off = oh * 3600 + om * 60;
+        t += (*p == '+') ? -off : off;
+    }
+    return (time_t)t;
+}
+
+static void handle_lot_ack_json(const char *json)
+{
+    cJSON *root = cJSON_Parse(json);
+    if (!root)
+    {
+        ESP_LOGW(TAG, "lot/ack: invalid JSON");
+        return;
+    }
+
+    const cJSON *req = cJSON_GetObjectItem(root, "request_id");
+    bool ok = cJSON_IsTrue(cJSON_GetObjectItem(root, "ok"));
+    bool query = cJSON_IsTrue(cJSON_GetObjectItem(root, "query"));
+    const cJSON *lot = cJSON_GetObjectItem(root, "lot");
+    const cJSON *err = cJSON_GetObjectItem(root, "error");
+
+    /* Is this the answer to the NEW LOT request we're waiting for? */
+    bool mine = false;
+    if (!query && cJSON_IsString(req))
+    {
+        portENTER_CRITICAL(&s_lot_mux);
+        mine = s_lot_req_id[0] && strcmp(s_lot_req_id, req->valuestring) == 0;
+        if (mine)
+            s_lot_req_id[0] = '\0';
+        portEXIT_CRITICAL(&s_lot_mux);
+    }
+
+    if (ok && cJSON_IsObject(lot))
+    {
+        const cJSON *num = cJSON_GetObjectItem(lot, "lot_number");
+        const cJSON *st = cJSON_GetObjectItem(lot, "status");
+        const cJSON *ca = cJSON_GetObjectItem(lot, "created_at");
+        bool active = !cJSON_IsString(st) || strcmp(st->valuestring, "active") == 0;
+        if (cJSON_IsNumber(num))
+            weight_state_set_lot(active, (int64_t)num->valuedouble,
+                                 cJSON_IsString(ca) ? parse_iso8601(ca->valuestring) : 0);
+    }
+    else if (ok && query)
+    {
+        weight_state_set_lot(false, 0, 0); /* machine has no active lot */
+    }
+
+    if (mine)
+        weight_state_lot_request_finish(ok ? WEIGHT_LOT_RESULT_OK : WEIGHT_LOT_RESULT_ERROR);
+
+    if (!ok)
+        ESP_LOGW(TAG, "lot/ack error: %s", cJSON_IsString(err) ? err->valuestring : "?");
+
+    cJSON_Delete(root);
+}
+
 /* ============================================================================
  * Sync ingestion (MQTT task)
  * ========================================================================== */
@@ -385,6 +511,8 @@ static void on_data(esp_mqtt_event_handle_t ev)
         s_rx_total = ev->total_data_len;
 
         ESP_LOGD(TAG, "data on '%.*s' (%d bytes)", ev->topic_len, ev->topic, ev->total_data_len);
+        s_rx_is_lot = (size_t)ev->topic_len == strlen(s_topic_lot_ack) &&
+                      memcmp(ev->topic, s_topic_lot_ack, ev->topic_len) == 0;
 
         if (s_rx_total <= 0 || s_rx_total > SYNC_MSG_MAX)
         {
@@ -419,7 +547,10 @@ static void on_data(esp_mqtt_event_handle_t ev)
         return; /* more fragments coming */
 
     s_rx_buf[s_rx_total] = '\0';
-    handle_sync_json(s_rx_buf);
+    if (s_rx_is_lot)
+        handle_lot_ack_json(s_rx_buf);
+    else
+        handle_sync_json(s_rx_buf);
     free(s_rx_buf);
     s_rx_buf = NULL;
 }
@@ -440,9 +571,11 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base,
         weight_state_set_mqtt(true);
         ESP_LOGI(TAG, "connected - subscribing to '%s'", s_topic_sync_sub);
         esp_mqtt_client_subscribe(c, s_topic_sync_sub, 1);
+        esp_mqtt_client_subscribe(c, s_topic_lot_ack, 1);
         status_c(c);
         heartbeat_c(c);
         request_sync_c(c);
+        lot_get_c(c); /* subscribe is queued first, so the answer isn't missed */
         ring_flush_c(c);
         if (s_heartbeat_timer)
         {
@@ -859,6 +992,11 @@ esp_err_t weight_mqtt_publish_new_lot(void)
     if (!payload)
         return ESP_ERR_NO_MEM;
 
+    /* Remember the id before sending so a fast ack can't beat us to it */
+    portENTER_CRITICAL(&s_lot_mux);
+    strlcpy(s_lot_req_id, req_id, sizeof(s_lot_req_id));
+    portEXIT_CRITICAL(&s_lot_mux);
+
     esp_err_t err = ESP_ERR_INVALID_STATE;
     if (client_lock(LOCK_WAIT_PUBLISH))
     {
@@ -869,7 +1007,27 @@ esp_err_t weight_mqtt_publish_new_lot(void)
     else
         err = ESP_ERR_TIMEOUT;
 
+    if (err == ESP_OK)
+        weight_state_lot_request_begin();
+    else
+    {
+        portENTER_CRITICAL(&s_lot_mux);
+        s_lot_req_id[0] = '\0';
+        portEXIT_CRITICAL(&s_lot_mux);
+    }
+
     ESP_LOGI(TAG, "new lot -> '%s': %s", s_topic_lot_new, esp_err_to_name(err));
     free(payload);
+    return err;
+}
+
+esp_err_t weight_mqtt_request_lot(void)
+{
+    if (!client_lock(LOCK_WAIT_PUBLISH))
+        return ESP_ERR_TIMEOUT;
+    esp_err_t err = ESP_ERR_INVALID_STATE;
+    if (s_client && s_connected)
+        err = lot_get_c(s_client) >= 0 ? ESP_OK : ESP_FAIL;
+    client_unlock();
     return err;
 }

@@ -35,6 +35,13 @@ static const weight_lang_t LANG_JA = {
     .main_lot_sent = "新規ロットを要求しました",
     .main_lot_offline = "失敗 - MQTT未接続",
     .main_lot_no_machine = "マシンIDが未設定です (設定 > デバイス)",
+    .main_lot_current = "現在のロット",
+    .main_lot_none = "ロットなし",
+    .main_lot_since_fmt = "%s 開始",
+    .main_lot_pending = "要求中...",
+    .main_lot_ok_fmt = "ロット #%ld を開始しました",
+    .main_lot_failed = "ロット開始に失敗しました",
+    .main_lot_timeout = "確認できません - 接続を確認",
 
     // screen_models
     .models_title_fmt = "モデル一覧 (%u)",

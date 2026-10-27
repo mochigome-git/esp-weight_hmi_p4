@@ -11,6 +11,8 @@
  *   PUB  {tenant_short}/{device_id}/status       LWT + retained status
  *   PUB  {tenant_short}/{device_id}/sync/req     request full model resync
  *   PUB  {tenant_short}/{device_id}/lot/new      new-lot request
+ *   PUB  {tenant_short}/{device_id}/lot/get      ask current lot (on connect)
+ *   SUB  {tenant_short}/{device_id}/lot/ack      goweight-bridge answer to new/get
  *   PUB  {tenant_short}/models/push              HMI model edits / deletes
  *   SUB  {tenant_short}/models/sync/#            upsert/delete events from Go svc
  *
@@ -79,6 +81,11 @@ extern "C"
 
     /* Returns ESP_ERR_NOT_FOUND if machine_id unset, ESP_ERR_INVALID_STATE if offline. */
     esp_err_t weight_mqtt_publish_new_lot(void);
+
+    /* Ask goweight-bridge for the machine's current lot (answer updates
+     * weight_state lot fields). Done automatically on every connect; call
+     * this after the machine id changes. */
+    esp_err_t weight_mqtt_request_lot(void);
 
 #ifdef __cplusplus
 }

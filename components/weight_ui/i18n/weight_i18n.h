@@ -39,6 +39,13 @@ typedef struct
     const char *main_lot_sent;
     const char *main_lot_offline;
     const char *main_lot_no_machine;
+    const char *main_lot_current;     /* "current lot" card title */
+    const char *main_lot_none;        /* machine has no active lot */
+    const char *main_lot_since_fmt;   /* %s = HH:MM the lot started */
+    const char *main_lot_pending;     /* waiting for goweight-bridge */
+    const char *main_lot_ok_fmt;      /* %ld = new lot number */
+    const char *main_lot_failed;      /* bridge refused / DB error */
+    const char *main_lot_timeout;     /* no answer in time */
 
     // --- screen_models ---
     const char *models_title_fmt; /* "Models (%u)" format */

@@ -8,6 +8,7 @@
 #include "weight_state.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -242,4 +243,49 @@ void weight_state_set_tenant(const char *tenant_id, const char *tenant_short)
     strlcpy(sh, s_state.tenant_short, sizeof(sh));
     UNLOCK();
     ESP_LOGI(TAG, "tenant updated: %s / %s", id, sh);
+}
+
+/* ---------- Current lot ---------- */
+void weight_state_set_lot(bool active, int64_t lot_number, time_t started_ts)
+{
+    LOCK();
+    s_state.lot_known = true;
+    s_state.lot_active = active;
+    s_state.lot_number = active ? lot_number : 0;
+    s_state.lot_started_ts = active ? started_ts : 0;
+    UNLOCK();
+    if (active)
+        ESP_LOGI(TAG, "lot: #%lld", (long long)lot_number);
+    else
+        ESP_LOGI(TAG, "lot: none active");
+}
+
+void weight_state_clear_lot(void)
+{
+    LOCK();
+    s_state.lot_known = false;
+    s_state.lot_active = false;
+    s_state.lot_number = 0;
+    s_state.lot_started_ts = 0;
+    UNLOCK();
+}
+
+void weight_state_lot_request_begin(void)
+{
+    LOCK();
+    s_state.lot_req_pending = true;
+    s_state.lot_req_since_us = esp_timer_get_time();
+    UNLOCK();
+}
+
+void weight_state_lot_request_finish(weight_lot_result_t result)
+{
+    LOCK();
+    if (s_state.lot_req_pending)
+    {
+        s_state.lot_req_pending = false;
+        s_state.lot_result = result;
+        s_state.lot_result_seq++;
+    }
+    UNLOCK();
 }

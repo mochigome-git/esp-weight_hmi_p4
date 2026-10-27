@@ -32,6 +32,13 @@ static const weight_lang_t LANG_EN = {
     .main_lot_sent = "New lot requested",
     .main_lot_offline = "Failed - MQTT not connected",
     .main_lot_no_machine = "Machine ID not set (Settings > Device)",
+    .main_lot_current = "current lot",
+    .main_lot_none = "no active lot",
+    .main_lot_since_fmt = "since %s",
+    .main_lot_pending = "requesting...",
+    .main_lot_ok_fmt = "Lot #%ld started",
+    .main_lot_failed = "New lot failed - try again",
+    .main_lot_timeout = "No reply - check connection",
 
     // screen_models
     .models_title_fmt = "Models (%u)",
