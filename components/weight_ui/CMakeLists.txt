@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "weight_ui.c"
+        "weight_ui_watchdog.c"
         "screens/screen_main.c"
         "screens/screen_models.c"
         "screens/screen_model_edit.c"

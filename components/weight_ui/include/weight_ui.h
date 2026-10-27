@@ -50,6 +50,11 @@ extern "C"
      * is deleted. */
     void weight_ui_rebuild_screen(ui_screen_id_t id);
 
+    /* UI freeze guard: restarts the device if the LVGL task stops running
+     * for 20 s, and logs heap usage every 60 s. Started by weight_ui_init(). */
+    esp_err_t weight_ui_watchdog_start(void);
+    void weight_ui_log_heap(const char *why);
+
     /* ---------------------------------------------------------------------------
      * Screen builder forward declarations
      * Each returns the screen root lv_obj_t * (a screen created with

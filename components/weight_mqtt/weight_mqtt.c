@@ -41,6 +41,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_random.h"
+#include "esp_system.h"
 
 #define FW_VERSION "1.0.1"
 
@@ -325,6 +326,18 @@ static int heartbeat_c(esp_mqtt_client_handle_t c)
     cJSON_AddStringToObject(status_obj, "kind", "heartbeat");
     cJSON_AddNumberToObject(status_obj, "uptime_s", get_uptime_s());
     cJSON_AddNumberToObject(status_obj, "pending_readings", (double)s_ring_count);
+    /* Memory health - watch these trend over hours/days on the broker.
+     * heap_int_min falling steadily = leak; heap_int_largest shrinking while
+     * heap_int_free stays OK = fragmentation. */
+    cJSON_AddNumberToObject(status_obj, "heap_int_free",
+                            (double)heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    cJSON_AddNumberToObject(status_obj, "heap_int_min",
+                            (double)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    cJSON_AddNumberToObject(status_obj, "heap_int_largest",
+                            (double)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+    cJSON_AddNumberToObject(status_obj, "heap_psram_free",
+                            (double)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    cJSON_AddNumberToObject(status_obj, "reset_reason", (double)esp_reset_reason());
     cJSON_AddItemToObject(root, "status", status_obj);
 
     char *payload = cJSON_PrintUnformatted(root);

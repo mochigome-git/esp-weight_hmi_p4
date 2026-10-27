@@ -89,6 +89,8 @@ esp_err_t weight_ui_init(void)
 
     bsp_display_unlock();
 
+    weight_ui_watchdog_start();
+
     ESP_LOGI(TAG, "UI init: main screen ready (others built on demand)");
     return ESP_OK;
 }
