@@ -89,14 +89,16 @@ Topics use the short tenant slug (`TENANT_SHORT` macro in `main.c`, e.g. `gim`)
 to keep them compact on the broker. The JSON payload still carries the full
 `tenant_id` UUID for database joins.
 
-- PUB `{tenant_short}/{device_id}/weight` - reading JSON, QoS 1
+- PUB `{tenant_short}/devices/payload` - reading JSON (QoS 1) and heartbeat.
+  This is the topic the EMQX rule bridges to Kafka for gokafka-raw;
+  `device_id` is carried in the payload.
 - PUB `{tenant_short}/{device_id}/status` - retained + LWT, QoS 1
 - PUB `{tenant_short}/{device_id}/sync/req` - resync request on boot
 - SUB `{tenant_short}/models/sync/+` - upsert/delete events
 
 Example with `TENANT_SHORT="gim"` and device `p4-7c4f1a2b3c4d`:
 
-- `gim/p4-7c4f1a2b3c4d/weight`
+- `gim/devices/payload`
 - `gim/p4-7c4f1a2b3c4d/status`
 - `gim/models/sync/abc-uuid`
 

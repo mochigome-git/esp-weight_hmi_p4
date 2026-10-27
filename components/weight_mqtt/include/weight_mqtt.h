@@ -7,13 +7,16 @@
  * tenant_id UUID for database joins. device_id is the configured device id,
  * falling back to the MAC-derived one.
  *
- *   PUB  {tenant_short}/{device_id}/weight       reading JSON (QoS1)
+ *   PUB  {tenant_short}/devices/payload          reading JSON (QoS1) + heartbeat (30 s)
  *   PUB  {tenant_short}/{device_id}/status       LWT + retained status
  *   PUB  {tenant_short}/{device_id}/sync/req     request full model resync
  *   PUB  {tenant_short}/{device_id}/lot/new      new-lot request
- *   PUB  {tenant_short}/devices/payload          heartbeat (30 s)
  *   PUB  {tenant_short}/models/push              HMI model edits / deletes
  *   SUB  {tenant_short}/models/sync/#            upsert/delete events from Go svc
+ *
+ * Readings share {tenant_short}/devices/payload with the heartbeat because
+ * that is the only topic the EMQX rule bridges to Kafka (gcl_devices_payload)
+ * for gokafka-raw. device_id travels in the JSON body.
  *
  * Reading JSON shape:
  *   {

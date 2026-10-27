@@ -161,7 +161,11 @@ static void build_topics_locked(void)
     current_device_id(s_dev_id, sizeof(s_dev_id));
 
     const char *t = snap.tenant_short;
-    snprintf(s_topic_reading, sizeof(s_topic_reading), "%s/%s/weight", t, s_dev_id);
+    /* Readings go on the shared ingest topic, NOT {t}/{dev}/weight: the EMQX
+     * rule only bridges {t}/devices/payload -> Kafka (gcl_devices_payload),
+     * so anything on /weight never reached gokafka-raw. device_id is already
+     * in the JSON body, so it doesn't need to be in the topic. */
+    snprintf(s_topic_reading, sizeof(s_topic_reading), "%s/devices/payload", t);
     snprintf(s_topic_status, sizeof(s_topic_status), "%s/%s/status", t, s_dev_id);
     snprintf(s_topic_sync_req, sizeof(s_topic_sync_req), "%s/%s/sync/req", t, s_dev_id);
     snprintf(s_topic_sync_sub, sizeof(s_topic_sync_sub), "%s/models/sync/#", t);
