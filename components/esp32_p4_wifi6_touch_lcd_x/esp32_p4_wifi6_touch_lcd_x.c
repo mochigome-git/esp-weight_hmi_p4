@@ -709,6 +709,8 @@ esp_err_t bsp_i2c_init(void)
         .sda_io_num = BSP_I2C_SDA,
         .scl_io_num = BSP_I2C_SCL,
         .i2c_port = BSP_I2C_NUM,
+        .glitch_ignore_cnt = 7,               /* filter short noise spikes on SDA/SCL */
+        .flags.enable_internal_pullup = true, /* backs up the board's external pull-ups */
     };
     BSP_ERROR_CHECK_RETURN_ERR(i2c_new_master_bus(&i2c_bus_conf, &i2c_handle));
 
