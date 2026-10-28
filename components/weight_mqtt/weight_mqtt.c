@@ -25,6 +25,7 @@
  *     are flushed on the next MQTT_EVENT_CONNECTED.
  */
 
+#include <stdbool.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -635,6 +636,30 @@ static void on_state_change(void)
     weight_mqtt_publish_status();
 }
 
+/* Build the MQTT client id as "<device_name>-<device_id>".
+ * The broker allows one connection per client id, so two units sharing a
+ * device id would kick each other off; adding the device name keeps them
+ * apart. Characters outside [A-Za-z0-9_-] in the name become '_'.
+ * Falls back to the bare device id when no name is set. */
+static void build_client_id(const weight_config_t *cfg, char *out, size_t out_len)
+{
+    char name[WCFG_MAX_DEVICE_NAME_LEN];
+    size_t n = 0;
+    for (const char *p = cfg->device_name; *p && n < sizeof(name) - 1; p++)
+    {
+        char c = *p;
+        bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '-' || c == '_';
+        name[n++] = ok ? c : '_';
+    }
+    name[n] = '\0';
+
+    if (n > 0)
+        snprintf(out, out_len, "%s-%s", name, s_dev_id);
+    else
+        snprintf(out, out_len, "%s", s_dev_id);
+}
+
 /* ============================================================================
  * Client lifecycle
  * ========================================================================== */
@@ -685,13 +710,16 @@ static esp_err_t start_locked(void)
     snprintf(uri, sizeof(uri), "%s://%s:%u",
              cfg.mqtt_tls ? "mqtts" : "mqtt", cfg.mqtt_host, (unsigned)cfg.mqtt_port);
 
+    char client_id[WCFG_MAX_DEVICE_NAME_LEN + WCFG_MAX_DEVICE_ID_LEN + 2];
+    build_client_id(&cfg, client_id, sizeof(client_id));
+
     /* esp-mqtt copies uri / credentials / client id / LWT during init,
      * so stack buffers are fine here. The CA pointer is NOT copied. */
     esp_mqtt_client_config_t mc = {
         .broker.address.uri = uri,
         .credentials.username = cfg.mqtt_user,
         .credentials.authentication.password = cfg.mqtt_pass,
-        .credentials.client_id = s_dev_id,
+        .credentials.client_id = client_id,
         .session.last_will = {
             .topic = s_topic_status,
             .msg = lwt,
@@ -709,7 +737,7 @@ static esp_err_t start_locked(void)
         return ESP_FAIL;
 
     esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    ESP_LOGI(TAG, "starting client: %s (tls=%d)", uri, cfg.mqtt_tls);
+    ESP_LOGI(TAG, "starting client: %s (tls=%d) client_id=%s", uri, cfg.mqtt_tls, client_id);
 
     esp_err_t err = esp_mqtt_client_start(s_client);
     if (err != ESP_OK)
