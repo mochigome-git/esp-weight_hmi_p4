@@ -33,6 +33,7 @@ static lv_timer_t *s_refresh_timer = NULL;
 static lv_obj_t *s_weight_lbl;
 static lv_obj_t *s_unit_lbl;
 static lv_obj_t *s_status_pill_lbl;
+static lv_obj_t *s_pass_cnt_lbl; /* "PASS 123" counter, top-right of weight card */
 static lv_obj_t *s_weight_card;
 static lv_obj_t *s_model_lbl;
 static lv_obj_t *s_upper_lbl;
@@ -303,6 +304,7 @@ static void on_lot_confirm(lv_event_t *e)
     esp_err_t err = weight_mqtt_publish_new_lot();
     if (err == ESP_OK)
     {
+        weight_state_reset_pass_count(); /* new lot -> count from zero */
         s_last_lot_us = esp_timer_get_time();
         show_toast(TR(main_lot_sent), UI_COLOR_PASS_DARK);
     }
@@ -428,6 +430,10 @@ static void refresh_cb(lv_timer_t *t)
     }
 
     set_text_if_changed(s_status_pill_lbl, status_txt);
+
+    /* PASS counter */
+    snprintf(buf, sizeof(buf), "%s  %lu", TR(main_pass_count), (unsigned long)snap.pass_count);
+    set_text_if_changed(s_pass_cnt_lbl, buf);
 
     /* Card color — only show PASS/HIGH/LOW after reading is stable.
      * Otherwise stay neutral (panel color) while operator is still placing item. */
@@ -867,6 +873,26 @@ lv_obj_t *screen_main_create(void)
     lv_obj_set_style_text_font(s_status_pill_lbl, ui_font_small(), 0);
     lv_label_set_text(s_status_pill_lbl, "IDLE");
     lv_obj_center(s_status_pill_lbl);
+
+    /* PASS counter pill - mirrors the status pill on the right */
+    lv_obj_t *pass_pill = lv_obj_create(s_weight_card);
+    lv_obj_set_size(pass_pill, LV_SIZE_CONTENT, 40);
+    lv_obj_align(pass_pill, LV_ALIGN_TOP_RIGHT, -14, 10);
+    lv_obj_set_style_bg_color(pass_pill, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(pass_pill, LV_OPA_40, 0);
+    lv_obj_set_style_border_side(pass_pill, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_border_width(pass_pill, 4, 0);
+    lv_obj_set_style_border_color(pass_pill, UI_COLOR_PASS, 0);
+    lv_obj_set_style_radius(pass_pill, UI_RADIUS_S, 0);
+    lv_obj_set_style_pad_hor(pass_pill, 14, 0);
+    lv_obj_set_style_pad_ver(pass_pill, 0, 0);
+    lv_obj_clear_flag(pass_pill, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    s_pass_cnt_lbl = lv_label_create(pass_pill);
+    lv_obj_set_style_text_color(s_pass_cnt_lbl, UI_COLOR_TEXT, 0);
+    lv_obj_set_style_text_font(s_pass_cnt_lbl, ui_font_normal(), 0);
+    lv_label_set_text(s_pass_cnt_lbl, "");
+    lv_obj_center(s_pass_cnt_lbl);
 
     LV_FONT_DECLARE(lv_font_montserrat_bold_178);
     s_weight_lbl = lv_label_create(s_weight_card);

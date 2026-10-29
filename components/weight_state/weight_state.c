@@ -100,6 +100,8 @@ void weight_state_set_mode(weight_mode_t mode)
 void weight_state_set_active_model(const weight_active_model_t *m)
 {
     LOCK();
+    if (!s_state.model.valid || strcmp(s_state.model.id, m->id) != 0)
+        s_state.pass_count = 0; /* different model -> new count */
     memcpy(&s_state.model, m, sizeof(*m));
     s_state.model.valid = true;
     UNLOCK();
@@ -189,6 +191,20 @@ void weight_state_raise_alert(weight_status_t status, float v, time_t ts)
     s_state.alert_status = status;
     s_state.alert_reading = v;
     s_state.alert_ts = ts;
+    UNLOCK();
+}
+
+void weight_state_count_pass(void)
+{
+    LOCK();
+    s_state.pass_count++;
+    UNLOCK();
+}
+
+void weight_state_reset_pass_count(void)
+{
+    LOCK();
+    s_state.pass_count = 0;
     UNLOCK();
 }
 

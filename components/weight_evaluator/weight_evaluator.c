@@ -6,7 +6,7 @@
  *   sliding window -> stability -> limits -> state/audio/alert/MQTT
  *
  * Placement gate ("one publish per placement"):
- *   - Armed while the pan is empty (<= zero_threshold).
+ *   - Armed while the pan is empty (<= max(zero_threshold, noise floor)).
  *   - The first stable reading in RUN mode publishes, beeps, and (for
  *     HIGH/LOW) raises the sticky alert ONCE. The gate then locks until the
  *     pan returns to zero.
@@ -35,6 +35,15 @@ static const char *TAG = "eval";
 
 #ifndef EVAL_REARM_ON_CHANGE
 #define EVAL_REARM_ON_CHANGE 0
+#endif
+
+/* Empty-pan noise floor, in grams. The scale drifts a few hundredths of a
+ * gram around zero (0.00 / 0.01 / 0.02 ...); with zero_threshold at its 0.0
+ * default those drift readings were stable and > 0, so they were published
+ * as real placements. Anything at or below max(zero_threshold, this floor)
+ * is treated as an empty pan: never published, and it re-arms the gate. */
+#ifndef EVAL_NOISE_FLOOR_G
+#define EVAL_NOISE_FLOOR_G 0.5f
 #endif
 
 #define WINDOW_MAX 32
@@ -137,6 +146,23 @@ static void play_for_status(weight_status_t st)
     }
 }
 
+/* EVAL_NOISE_FLOOR_G expressed in the configured display unit */
+static float noise_floor_in_unit(wcfg_unit_t unit)
+{
+    switch (unit)
+    {
+    case WCFG_UNIT_KG:
+        return EVAL_NOISE_FLOOR_G / 1000.0f;
+    case WCFG_UNIT_LB:
+        return EVAL_NOISE_FLOOR_G / 453.59237f;
+    case WCFG_UNIT_OZ:
+        return EVAL_NOISE_FLOOR_G / 28.349523f;
+    case WCFG_UNIT_G:
+    default:
+        return EVAL_NOISE_FLOOR_G;
+    }
+}
+
 /* Evaluate one (bucket-averaged) value */
 static void process_value(float value, time_t ts)
 {
@@ -144,8 +170,11 @@ static void process_value(float value, time_t ts)
     weight_state_snapshot_t snap;
     weight_state_get_snapshot(&snap);
 
-    /* Zero - full reset, re-arm the placement gate */
-    if (value <= cfg->zero_threshold)
+    /* Zero / empty-pan noise - full reset, re-arm the placement gate */
+    float zero_level = noise_floor_in_unit(cfg->unit);
+    if (cfg->zero_threshold > zero_level)
+        zero_level = cfg->zero_threshold;
+    if (value <= zero_level)
     {
         win_reset();
         s_gate_locked = false;
@@ -196,6 +225,8 @@ static void process_value(float value, time_t ts)
 
     /* Non-blocking: queued to the MQTT outbox, or to the offline buffer */
     weight_mqtt_publish_reading(value, status, ts);
+    if (status == WEIGHT_STATUS_PASS)
+        weight_state_count_pass();
 
     s_published_value = value;
     s_published_status = status;

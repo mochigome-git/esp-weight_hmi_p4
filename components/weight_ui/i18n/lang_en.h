@@ -26,6 +26,7 @@ static const weight_lang_t LANG_EN = {
     .main_field_lower = "lower",
     .main_alert_high = "Reading exceeds upper limit",
     .main_alert_low = "Reading below lower limit",
+    .main_pass_count = "PASS",
     .main_btn_new_lot = "NEW LOT",
     .main_lot_confirm = "Start a new lot?",
     .main_lot_confirm_btn = "Start",

@@ -33,6 +33,7 @@ typedef struct
     const char *main_field_lower;
     const char *main_alert_high;
     const char *main_alert_low;
+    const char *main_pass_count;      /* label of the PASS counter */
     const char *main_btn_new_lot;
     const char *main_lot_confirm;
     const char *main_lot_confirm_btn;

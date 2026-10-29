@@ -29,6 +29,7 @@ static const weight_lang_t LANG_JA = {
     .main_field_lower = "下限",
     .main_alert_high = "上限を超えています",
     .main_alert_low = "下限を下回っています",
+    .main_pass_count = "合格",
     .main_btn_new_lot = "新規ロット",
     .main_lot_confirm = "新しいロットを開始しますか?",
     .main_lot_confirm_btn = "開始",

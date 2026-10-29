@@ -106,6 +106,10 @@ extern "C"
         int64_t lot_number;
         time_t lot_started_ts; /* production.lot.created_at, 0 if unknown */
 
+        /* Number of PASS placements published since the last model change
+         * or NEW LOT. RAM only - starts at 0 after boot. */
+        uint32_t pass_count;
+
         /* NEW LOT request round-trip, for UI feedback */
         bool lot_req_pending;
         int64_t lot_req_since_us;      /* esp_timer time when request was sent */
@@ -144,6 +148,12 @@ extern "C"
 
     /* Called by evaluator once per placement, on a fresh stable HIGH/LOW in RUN. */
     void weight_state_raise_alert(weight_status_t status, float value, time_t ts);
+
+    /* PASS counter: evaluator bumps it once per published PASS placement.
+     * Reset by the UI on NEW LOT; weight_state_set_active_model resets it
+     * itself when the model id actually changes. */
+    void weight_state_count_pass(void);
+    void weight_state_reset_pass_count(void);
 
     /* Called by UI when alert dismiss tapped. */
     void weight_state_dismiss_alert(void);
