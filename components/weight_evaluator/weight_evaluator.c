@@ -37,13 +37,14 @@ static const char *TAG = "eval";
 #define EVAL_REARM_ON_CHANGE 0
 #endif
 
-/* Empty-pan noise floor, in grams. The scale drifts a few hundredths of a
- * gram around zero (0.00 / 0.01 / 0.02 ...); with zero_threshold at its 0.0
- * default those drift readings were stable and > 0, so they were published
- * as real placements. Anything at or below max(zero_threshold, this floor)
- * is treated as an empty pan: never published, and it re-arms the gate. */
+/* Empty-pan noise floor, in grams. The scale (used in kg) drifts around
+ * zero by about 0.01 kg (10 g); with zero_threshold at its 0.0 default
+ * those drift readings were stable and > 0, so they were published as real
+ * placements. Anything at or below max(zero_threshold, this floor) is
+ * treated as an empty pan: never published, and it re-arms the gate.
+ * 100 g = 0.1 kg: 10x the drift, far below any real item (~7-10 kg). */
 #ifndef EVAL_NOISE_FLOOR_G
-#define EVAL_NOISE_FLOOR_G 0.5f
+#define EVAL_NOISE_FLOOR_G 100.0f
 #endif
 
 #define WINDOW_MAX 32
